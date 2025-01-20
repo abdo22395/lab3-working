@@ -10,7 +10,7 @@
 #include <linux/string.h>
 
 #define DEVICE_NAME "sram_uart_device"
-#define UART_DEVICE "/dev/ttyAMA0" // Adjust as needed based on your device
+#define UART_DEVICE "/dev/ttyAMA0"  // Adjust as needed based on your device
 
 static struct proc_dir_entry *proc_entry;
 static char data_buffer[256];  // Buffer for storing read or written data
@@ -38,7 +38,7 @@ static void uart_receive_data(struct tty_struct *tty)
     data_buffer[i] = '\0';  // Null-terminate the string
 }
 
-// File operations for reading from /proc
+// Read operation for /proc file
 static ssize_t proc_read(struct file *file, char __user *buf, size_t count, loff_t *offset)
 {
     struct tty_struct *tty;
@@ -67,7 +67,7 @@ static ssize_t proc_read(struct file *file, char __user *buf, size_t count, loff
     return strlen(data_buffer);
 }
 
-// File operations for writing to /proc
+// Write operation for /proc file
 static ssize_t proc_write(struct file *file, const char __user *buf, size_t count, loff_t *offset)
 {
     struct tty_struct *tty;
@@ -92,17 +92,17 @@ static ssize_t proc_write(struct file *file, const char __user *buf, size_t coun
     return count;
 }
 
-// File operations structure for /proc file handling
-static struct file_operations fops = {
-    .read = proc_read,
-    .write = proc_write,
+// Define the proc_ops structure (used in newer kernels)
+static const struct proc_ops proc_fops = {
+    .proc_read = proc_read,
+    .proc_write = proc_write,
 };
 
 // Module initialization function
 static int __init sram_uart_module_init(void)
 {
     // Create a /proc entry for our module
-    proc_entry = proc_create(DEVICE_NAME, 0666, NULL, &fops);
+    proc_entry = proc_create(DEVICE_NAME, 0666, NULL, &proc_fops);
     if (!proc_entry) {
         pr_err("Failed to create /proc entry\n");
         return -ENOMEM;  // Return error if /proc entry creation fails

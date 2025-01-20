@@ -7,6 +7,8 @@
 #include <linux/fs.h>
 #include <linux/termios.h>
 #include <linux/delay.h>
+#include <linux/tty.h>     // Kernel tty interface
+#include <linux/serial.h>  // For UART/serial configuration
 
 #define PROC_NAME "my_module"
 #define BUFFER_SIZE 256
@@ -16,6 +18,7 @@
 static struct proc_dir_entry *proc_entry;
 static char buffer[BUFFER_SIZE];
 static struct file *uart_file = NULL;
+static struct tty_struct *tty;
 
 // Function to generate random heart rate value (between 60 and 120)
 int generate_random_heart_rate(void) {
@@ -23,29 +26,24 @@ int generate_random_heart_rate(void) {
 }
 
 // Function to configure UART (9600 baud, 8N1)
-int configure_uart(struct file *uart_file) {
+int configure_uart(struct tty_struct *tty) {
     struct termios options;
 
-    // Use vfs_getattr to get file attributes (this is not the same as tcgetattr)
-    struct kstat stat;
-    int err = vfs_getattr(&uart_file->f_path, &stat);
-    if (err) {
-        printk(KERN_ERR "Failed to get file attributes for UART\n");
+    // Get current tty settings
+    if (tty_get_termios(tty, &options)) {
+        printk(KERN_ERR "Failed to get UART termios settings\n");
         return -EINVAL;
     }
 
-    // Since vfs_getattr doesn't retrieve terminal settings, we'll configure UART manually.
-    // But let's assume some default values as an example.
-
-    // Set baud rate to 9600 (This part will still require termios)
-    cfsetispeed(&options, B9600);
-    cfsetospeed(&options, B9600);
+    // Set baud rate to 9600 (B9600 in kernel space)
+    options.c_cflag &= ~CBAUD;        // Clear current baud rate
+    options.c_cflag |= B9600;         // Set baud rate to 9600
 
     // 8N1 (8 data bits, no parity, 1 stop bit)
-    options.c_cflag &= ~PARENB; // No parity
-    options.c_cflag &= ~CSTOPB; // 1 stop bit
+    options.c_cflag &= ~PARENB;       // No parity
+    options.c_cflag &= ~CSTOPB;       // 1 stop bit
     options.c_cflag &= ~CSIZE;
-    options.c_cflag |= CS8;     // 8 data bits
+    options.c_cflag |= CS8;           // 8 data bits
 
     // No hardware flow control
     options.c_cflag &= ~CRTSCTS;
@@ -56,9 +54,9 @@ int configure_uart(struct file *uart_file) {
     // No software flow control
     options.c_iflag &= ~(IXON | IXOFF | IXANY);
 
-    // Set the new attributes (this part remains the same)
-    if (tcsetattr(uart_file->f_inode->i_rdev, TCSANOW, &options) < 0) {
-        printk(KERN_ERR "Failed to set UART attributes\n");
+    // Set the new termios settings for UART
+    if (tty_set_termios(tty, &options)) {
+        printk(KERN_ERR "Failed to set UART termios settings\n");
         return -EINVAL;
     }
 
@@ -110,8 +108,17 @@ static int __init hello_init(void) {
         return PTR_ERR(uart_file);
     }
 
-    // Configure the UART settings
-    if (configure_uart(uart_file) != 0) {
+    // Get tty struct for the device (used for configuring UART)
+    tty = tty_port_tty_get(&uart_file->f_inode->i_rdev);
+    if (!tty) {
+        printk(KERN_ERR "Failed to get tty struct\n");
+        filp_close(uart_file, NULL);
+        return -EINVAL;
+    }
+
+    // Configure the UART
+    if (configure_uart(tty) != 0) {
+        tty_kref_put(tty);
         filp_close(uart_file, NULL);
         return -EINVAL;
     }
@@ -120,6 +127,7 @@ static int __init hello_init(void) {
     proc_entry = proc_create(PROC_NAME, 0, NULL, &proc_fops);
     if (proc_entry == NULL) {
         printk(KERN_ALERT "Failed to create /proc/%s\n", PROC_NAME);
+        tty_kref_put(tty);
         filp_close(uart_file, NULL);
         return -ENOMEM;
     }
@@ -131,6 +139,7 @@ static int __init hello_init(void) {
 // Module cleanup
 static void __exit hello_exit(void) {
     proc_remove(proc_entry);
+    tty_kref_put(tty);  // Decrement tty reference count
     filp_close(uart_file, NULL);
     printk(KERN_INFO "/proc/%s removed\n", PROC_NAME);
 }

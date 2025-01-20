@@ -5,14 +5,12 @@
 #include <linux/uaccess.h>
 #include <linux/random.h>  // For get_random_u32()
 #include <linux/fs.h>
-#include <linux/termios.h>
-#include <linux/delay.h>
 #include <linux/tty.h>     // Kernel tty interface
 #include <linux/serial.h>  // For UART/serial configuration
 
 #define PROC_NAME "my_module"
 #define BUFFER_SIZE 256
-#define UART_DEVICE "/dev/ttyAMA0"  // Raspberry Pi default UART device (might be ttyS0, check your system)
+#define UART_DEVICE "/dev/ttyAMA0"  // Raspberry Pi default UART device (adjust if necessary)
 
 // Variables
 static struct proc_dir_entry *proc_entry;
@@ -26,50 +24,50 @@ int generate_random_heart_rate(void) {
 
 // Function to configure UART (9600 baud, 8N1)
 int configure_uart(void) {
+    struct tty_struct *tty;
     struct termios options;
     int ret;
 
-    // Open the UART device directly using kernel API (no user-space functions)
+    // Open the UART device
     uart_file = filp_open(UART_DEVICE, O_RDWR | O_NOCTTY | O_SYNC, 0);
     if (IS_ERR(uart_file)) {
         printk(KERN_ERR "Failed to open UART device\n");
         return PTR_ERR(uart_file);
     }
 
-    // Get the current UART configuration
-    ret = vfs_ioctl(uart_file, TCGETS, (unsigned long)&options); // Get current settings
+    // Obtain the tty structure from the file descriptor
+    tty = tty_dev_open(uart_file->f_dentry->d_inode, NULL, NULL);
+    if (!tty) {
+        printk(KERN_ERR "Failed to get tty structure for UART device\n");
+        filp_close(uart_file, NULL);
+        return -ENODEV;
+    }
+
+    // Get the current terminal settings (termios)
+    ret = tty_get_termios(tty, &options);
     if (ret) {
         printk(KERN_ERR "Failed to get UART settings\n");
+        tty_dev_close(tty);
         filp_close(uart_file, NULL);
         return ret;
     }
 
-    // Set baud rate to 9600 (B9600 in kernel space)
-    cfsetispeed(&options, B9600);  // Set input baud rate
-    cfsetospeed(&options, B9600);  // Set output baud rate
+    // Set baud rate to 9600 (B9600)
+    options.c_cflag = B9600 | CS8 | CLOCAL | CREAD;  // 9600 baud, 8 data bits, enable receiver
+    options.c_iflag &= ~(IXON | IXOFF | IXANY);      // Disable software flow control
+    options.c_oflag &= ~OPOST;                       // Raw output mode
 
-    // 8N1 (8 data bits, no parity, 1 stop bit)
-    options.c_cflag &= ~PARENB;    // No parity
-    options.c_cflag &= ~CSTOPB;    // 1 stop bit
-    options.c_cflag &= ~CSIZE;
-    options.c_cflag |= CS8;        // 8 data bits
-
-    // No hardware flow control
-    options.c_cflag &= ~CRTSCTS;
-
-    // Enable receiver and set local mode
-    options.c_cflag |= (CLOCAL | CREAD);
-
-    // No software flow control
-    options.c_iflag &= ~(IXON | IXOFF | IXANY);
-
-    // Set the new termios settings for UART
-    ret = vfs_ioctl(uart_file, TCSETS, (unsigned long)&options); // Apply settings
+    // Apply new termios settings to UART
+    ret = tty_set_termios(tty, &options);
     if (ret) {
         printk(KERN_ERR "Failed to set UART settings\n");
+        tty_dev_close(tty);
         filp_close(uart_file, NULL);
         return ret;
     }
+
+    // Release tty resources
+    tty_dev_close(tty);
 
     return 0;
 }

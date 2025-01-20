@@ -30,52 +30,92 @@ static ssize_t read_proc(struct file *file, char __user *user_buffer,
 {
     printk(KERN_INFO "Called read_proc\n");
 
-    /* Return 0 (EOF) if already read or if count is too small for buffer */
+    // Return 0 (EOF) if already read or if count is too small for buffer
     if (*offset > 0 || count < PROCFS_MAX_SIZE) {
         return 0;
     }
 
-    /* Open the UART device */
+    // Open the UART device
     struct file* uart_file = filp_open("/dev/ttyACM0", O_RDONLY, 0);
     if (IS_ERR(uart_file)) {
-        printk(KERN_ERR "Failed to open UART device: %ld\n", PTR_ERR(uart_file));
+        printk(KERN_ERR "Failed to open UART device %ld\n", PTR_ERR(uart_file));
         return -EFAULT;
     }
 
-    /* Clear any leftover data in the UART buffer */
-    ssize_t nread = 0;
-    char buf[PROCFS_MAX_SIZE] = {0};
+    // Clear any leftover data in the UART buffer by reading a chunk of data
+    char discard_buffer[PROCFS_MAX_SIZE] = {0};
+    kernel_read(uart_file, discard_buffer, PROCFS_MAX_SIZE, &uart_file->f_pos);  // Discard data
 
-    /* Optionally, clear out any previous data */
-    if (kernel_read(uart_file, buf, PROCFS_MAX_SIZE, &uart_file->f_pos) < 0) {
-        printk(KERN_ERR "Failed to read from UART device.\n");
-        filp_close(uart_file, NULL);
-        return -EFAULT;
+    // Now read fresh data from the UART
+    char uart_buffer[PROCFS_MAX_SIZE] = {0};
+    ssize_t total_read = 0;
+    ssize_t bytes_read;
+    while (total_read < PROCFS_MAX_SIZE) {
+        bytes_read = kernel_read(uart_file, uart_buffer + total_read, PROCFS_MAX_SIZE - total_read, &uart_file->f_pos);
+        if (bytes_read <= 0) {
+            break;  // Exit if no more data is available
+        }
+        total_read += bytes_read;
     }
 
-    /* Read new data from the UART device */
-    nread = kernel_read(uart_file, buf, PROCFS_MAX_SIZE, &uart_file->f_pos);
-
-    /* Close the UART file */
     filp_close(uart_file, NULL);
 
-    if (nread < 0) {
-        printk(KERN_ERR "Error reading from UART device: %zd\n", nread);
+    // Copy the data from the kernel buffer to user-space
+    if (copy_to_user(user_buffer, uart_buffer, total_read)) {
         return -EFAULT;
     }
 
-    /* Copy the data from the kernel buffer to user space */
-    if (copy_to_user(user_buffer, buf, nread)) {
-        return -EFAULT;
-    }
+    // Update the offset to return EOF for subsequent reads
+    *offset = total_read;
 
-    /* Update the offset so subsequent reads return EOF */
-    *offset = nread;
-
-    /* Return the number of bytes read */
-    return nread;
+    // Return the number of bytes read
+    return total_read;
 }
+Explanation of Kernel Update:
+Flush UART Buffer: Before attempting to read new data, we discard the previous data in the UART buffer by reading and ignoring a chunk of data (discard_buffer).
+Reading Fresh Data: After flushing the UART buffer, the kernel module reads new data into uart_buffer and then copies it to user-space.
+3. User-Space Program Check
+Make sure the user-space program is reading correctly from /proc/arduinouno and printing the data. Here’s a quick check for that:
 
+c
+Copy
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <unistd.h>
+
+#define PROC_PATH "/proc/arduinouno"
+
+int main() {
+    char read_buffer[1024];  // Increased buffer size
+    FILE *proc_file;
+
+    while (1) {
+        // Open /proc/arduinouno for reading
+        proc_file = fopen(PROC_PATH, "r");
+        if (proc_file == NULL) {
+            perror("Failed to open /proc/arduinouno for reading");
+            return 1;
+        }
+
+        // Read all available data from the kernel module (until EOF)
+        size_t bytes_read = fread(read_buffer, 1, sizeof(read_buffer) - 1, proc_file);
+        read_buffer[bytes_read] = '\0';  // Null-terminate the string
+
+        if (bytes_read > 0) {
+            printf("Read data from UART: %s\n", read_buffer);
+        } else {
+            printf("No data read from UART.\n");
+        }
+
+        fclose(proc_file);
+
+        // Sleep for a bit before the next read
+        sleep(2);
+    }
+
+    return 0;
+}
 
 
 static ssize_t write_proc(struct file* file, const char __user* user_buffer,

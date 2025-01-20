@@ -9,7 +9,7 @@ HR_NOTIFY_UUID = "00002a37-0000-1000-8000-00805f9b34fb"
 
 # MariaDB connection details
 db_config = {
-    'host': 'localhos',  # or the IP of the Raspberry Pi
+    'host': 'localhost',  # or the IP of the Raspberry Pi
     'port': 3306,
     'user': 'Daytoo',
     'password': 'Magnfacnt123',

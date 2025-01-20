@@ -30,48 +30,52 @@ static ssize_t read_proc(struct file *file, char __user *user_buffer,
 {
     printk(KERN_INFO "Called read_proc\n");
 
-    /* Returnera 0 (EOF) om vi redan läst en gång,
-       eller om count är för litet för att hantera vår buffert. */
+    /* Return 0 (EOF) if already read or if count is too small for buffer */
     if (*offset > 0 || count < PROCFS_MAX_SIZE) {
         return 0;
     }
 
-    /* Öppna /dev/ttyACM0 */
-    {
-        struct file* testfd = filp_open("/dev/ttyACM0", O_RDWR, 0);
-        if (IS_ERR(testfd)) {
-            printk(KERN_ERR "Failed to open /dev/ttyACM0: %ld\n", PTR_ERR(testfd));
-            return -EFAULT;
-        }
-        /* Läs data från /dev/ttyACM0 in i en lokal buffert */
-        {
-            char buf[PROCFS_MAX_SIZE] = {0};
-
-            /* Läs upp till PROCFS_MAX_SIZE tecken. Använd offset = 0 för seriellporten. */
-            ssize_t nread = kernel_read(testfd, buf, PROCFS_MAX_SIZE, 0);
-            filp_close(testfd, NULL);
-
-            if (nread < 0) {
-                printk(KERN_ERR "Error reading from /dev/ttyACM0: %zd\n", nread);
-                return -EFAULT;
-            }
-
-            /* Kopiera det vi läste från buf till användarutrymmet. */
-            if (copy_to_user(user_buffer, buf, nread)) {
-                return -EFAULT;
-            }
-
-            /*
-             * Sätt *offset så att om du kör cat /proc/arduinouno,
-             * kommer ytterligare läsningar i samma cat att returnera 0 (EOF).
-             */
-            *offset = nread;
-
-            /* Returnera hur många byte vi faktiskt skickade. */
-            return nread;
-        }
+    /* Open the UART device */
+    struct file* uart_file = filp_open("/dev/ttyACM0", O_RDONLY, 0);
+    if (IS_ERR(uart_file)) {
+        printk(KERN_ERR "Failed to open UART device: %ld\n", PTR_ERR(uart_file));
+        return -EFAULT;
     }
+
+    /* Clear any leftover data in the UART buffer */
+    ssize_t nread = 0;
+    char buf[PROCFS_MAX_SIZE] = {0};
+
+    /* Optionally, clear out any previous data */
+    if (kernel_read(uart_file, buf, PROCFS_MAX_SIZE, &uart_file->f_pos) < 0) {
+        printk(KERN_ERR "Failed to read from UART device.\n");
+        filp_close(uart_file, NULL);
+        return -EFAULT;
+    }
+
+    /* Read new data from the UART device */
+    nread = kernel_read(uart_file, buf, PROCFS_MAX_SIZE, &uart_file->f_pos);
+
+    /* Close the UART file */
+    filp_close(uart_file, NULL);
+
+    if (nread < 0) {
+        printk(KERN_ERR "Error reading from UART device: %zd\n", nread);
+        return -EFAULT;
+    }
+
+    /* Copy the data from the kernel buffer to user space */
+    if (copy_to_user(user_buffer, buf, nread)) {
+        return -EFAULT;
+    }
+
+    /* Update the offset so subsequent reads return EOF */
+    *offset = nread;
+
+    /* Return the number of bytes read */
+    return nread;
 }
+
 
 static ssize_t write_proc(struct file* file, const char __user* user_buffer,
                           size_t count, loff_t* offset)

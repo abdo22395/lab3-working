@@ -30,7 +30,7 @@ static ssize_t read_proc(struct file *file, char __user *user_buffer,
 {
     printk(KERN_INFO "Called read_proc\n");
 
-    /* Return 0 (EOF) if already read or if count is too small for buffer */
+    /* Return 0 (EOF) if we've already read or if the requested size is too small for buffer */
     if (*offset > 0 || count < PROCFS_MAX_SIZE) {
         return 0;
     }
@@ -38,42 +38,44 @@ static ssize_t read_proc(struct file *file, char __user *user_buffer,
     /* Open the UART device */
     struct file* uart_file = filp_open("/dev/ttyACM0", O_RDONLY, 0);
     if (IS_ERR(uart_file)) {
-        printk(KERN_ERR "Failed to open UART device: %ld\n", PTR_ERR(uart_file));
+        printk(KERN_ERR "Failed to open UART device %ld\n", PTR_ERR(uart_file));
         return -EFAULT;
     }
 
-    /* Clear any leftover data in the UART buffer */
-    ssize_t nread = 0;
-    char buf[PROCFS_MAX_SIZE] = {0};
-
-    /* Optionally, clear out any previous data */
-    if (kernel_read(uart_file, buf, PROCFS_MAX_SIZE, &uart_file->f_pos) < 0) {
-        printk(KERN_ERR "Failed to read from UART device.\n");
+    /* Dynamically allocate a larger buffer for reading data */
+    char *uart_buffer = kzalloc(PROCFS_MAX_SIZE, GFP_KERNEL);
+    if (!uart_buffer) {
         filp_close(uart_file, NULL);
-        return -EFAULT;
+        return -ENOMEM;
     }
 
-    /* Read new data from the UART device */
-    nread = kernel_read(uart_file, buf, PROCFS_MAX_SIZE, &uart_file->f_pos);
+    /* Read data from the UART */
+    ssize_t total_read = 0;
+    ssize_t bytes_read;
+    while (total_read < PROCFS_MAX_SIZE) {
+        bytes_read = kernel_read(uart_file, uart_buffer + total_read, PROCFS_MAX_SIZE - total_read, &uart_file->f_pos);
+        if (bytes_read <= 0) {
+            break;  // Exit if no more data is available
+        }
+        total_read += bytes_read;
+    }
 
-    /* Close the UART file */
     filp_close(uart_file, NULL);
 
-    if (nread < 0) {
-        printk(KERN_ERR "Error reading from UART device: %zd\n", nread);
+    /* Copy the data from the kernel buffer to user-space */
+    if (copy_to_user(user_buffer, uart_buffer, total_read)) {
+        kfree(uart_buffer);
         return -EFAULT;
     }
 
-    /* Copy the data from the kernel buffer to user space */
-    if (copy_to_user(user_buffer, buf, nread)) {
-        return -EFAULT;
-    }
+    /* Update the offset */
+    *offset = total_read;
 
-    /* Update the offset so subsequent reads return EOF */
-    *offset = nread;
+    /* Free the allocated buffer */
+    kfree(uart_buffer);
 
     /* Return the number of bytes read */
-    return nread;
+    return total_read;
 }
 
 

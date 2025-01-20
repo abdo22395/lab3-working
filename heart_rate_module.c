@@ -18,7 +18,6 @@
 static struct proc_dir_entry *proc_entry;
 static char buffer[BUFFER_SIZE];
 static struct file *uart_file = NULL;
-static struct tty_struct *tty;
 
 // Function to generate random heart rate value (between 60 and 120)
 int generate_random_heart_rate(void) {
@@ -28,7 +27,6 @@ int generate_random_heart_rate(void) {
 // Function to configure UART (9600 baud, 8N1)
 int configure_uart(void) {
     struct termios options;
-    struct tty_struct *tty = NULL;
     int ret;
 
     // Open the UART device directly using kernel API (no user-space functions)
@@ -38,29 +36,23 @@ int configure_uart(void) {
         return PTR_ERR(uart_file);
     }
 
-    tty = uart_file->f_inode->i_rdev;
-    if (!tty) {
-        printk(KERN_ERR "Failed to get tty struct\n");
-        filp_close(uart_file, NULL);
-        return -EINVAL;
-    }
-
-    // Get current tty settings
-    ret = tty_get_termios(tty, &options);
+    // Get the current UART configuration
+    ret = vfs_ioctl(uart_file, TCGETS, (unsigned long)&options); // Get current settings
     if (ret) {
-        printk(KERN_ERR "Failed to get termios\n");
+        printk(KERN_ERR "Failed to get UART settings\n");
+        filp_close(uart_file, NULL);
         return ret;
     }
 
     // Set baud rate to 9600 (B9600 in kernel space)
-    options.c_cflag &= ~CBAUD;        // Clear current baud rate
-    options.c_cflag |= B9600;         // Set baud rate to 9600
+    cfsetispeed(&options, B9600);  // Set input baud rate
+    cfsetospeed(&options, B9600);  // Set output baud rate
 
     // 8N1 (8 data bits, no parity, 1 stop bit)
-    options.c_cflag &= ~PARENB;       // No parity
-    options.c_cflag &= ~CSTOPB;       // 1 stop bit
+    options.c_cflag &= ~PARENB;    // No parity
+    options.c_cflag &= ~CSTOPB;    // 1 stop bit
     options.c_cflag &= ~CSIZE;
-    options.c_cflag |= CS8;           // 8 data bits
+    options.c_cflag |= CS8;        // 8 data bits
 
     // No hardware flow control
     options.c_cflag &= ~CRTSCTS;
@@ -72,9 +64,10 @@ int configure_uart(void) {
     options.c_iflag &= ~(IXON | IXOFF | IXANY);
 
     // Set the new termios settings for UART
-    ret = tty_set_termios(tty, &options);
+    ret = vfs_ioctl(uart_file, TCSETS, (unsigned long)&options); // Apply settings
     if (ret) {
-        printk(KERN_ERR "Failed to set termios\n");
+        printk(KERN_ERR "Failed to set UART settings\n");
+        filp_close(uart_file, NULL);
         return ret;
     }
 

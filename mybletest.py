@@ -13,7 +13,7 @@ db_config = {
     'port': 3306,
     'user': 'Daytoo',
     'password': 'Magnfacnt123',
-    'database': 'heart_rate_db'
+    'database': 'sensor_data'
 }
 
 # Connect to the MariaDB database

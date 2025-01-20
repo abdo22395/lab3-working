@@ -1,131 +1,150 @@
-#include <linux/module.h>
-#include <linux/kernel.h>
 #include <linux/init.h>
-#include <linux/fs.h>
+#include <linux/module.h>
 #include <linux/uaccess.h>
+#include <linux/fs.h>
 #include <linux/proc_fs.h>
-#include <linux/tty.h>
+#include <linux/kernel.h>
 #include <linux/serial.h>
+#include <linux/tty.h>
 #include <linux/errno.h>
-#include <linux/string.h>
 
-#define DEVICE_NAME "sram_uart_device"
-#define UART_DEVICE "/dev/ttyAMA0"  // Adjust as needed based on your device
+#define MESSAGE_LENGTH 5
+#define PROCFS_MAX_SIZE 256
+#define UART_DEVICE "/dev/ttyACM1"  // Change this to your specific UART device
+#define UART_BAUDRATE 9600  // Adjust as necessary
 
-static struct proc_dir_entry *proc_entry;
-static char data_buffer[256];  // Buffer for storing read or written data
+static struct proc_dir_entry* proc_entry;
+static char read_proc_buffer[PROCFS_MAX_SIZE];
+static unsigned long read_proc_buffer_size = 0;
 
-// Function to send data to UART
-static void uart_send_data(struct tty_struct *tty, const char *data)
+// Function to send data to UART (Arduino)
+static void uart_send_data(const char *data)
 {
-    while (*data) {
-        tty->driver->ops->write(tty, data, 1);  // Send one byte at a time
-        data++;
+    struct file *testfd;
+    ssize_t bytes_written;
+
+    testfd = filp_open(UART_DEVICE, O_RDWR, 0);
+    if (IS_ERR(testfd)) {
+        pr_err("Failed to open UART device: %ld\n", PTR_ERR(testfd));
+        return;
     }
+
+    bytes_written = kernel_write(testfd, data, strlen(data), &testfd->f_pos);
+    if (bytes_written < 0) {
+        pr_err("Failed to write to UART device\n");
+    }
+
+    filp_close(testfd, NULL);
 }
 
-// Function to receive data from UART
-static void uart_receive_data(struct tty_struct *tty)
+// Function to read data from UART (Arduino)
+static ssize_t uart_read_data(void)
 {
-    int i = 0;
-    unsigned char ch;
-    memset(data_buffer, 0, sizeof(data_buffer));
+    struct file *testfd;
+    ssize_t bytes_read;
+    mm_segment_t old_fs;
 
-    // Read one byte at a time from UART
-    while (tty->driver->ops->read(tty, &ch, 1) > 0 && i < sizeof(data_buffer) - 1) {
-        data_buffer[i++] = ch;
-    }
-    data_buffer[i] = '\0';  // Null-terminate the string
-}
-
-// Read operation for /proc file
-static ssize_t proc_read(struct file *file, char __user *buf, size_t count, loff_t *offset)
-{
-    struct tty_struct *tty;
-    tty = tty_get_by_name(UART_DEVICE);  // Get the UART device by its name
-
-    if (tty == NULL) {
-        pr_err("Failed to get UART device: %s\n", UART_DEVICE);
-        return -ENODEV;  // Return error if UART device not found
-    }
-
-    uart_receive_data(tty);  // Read data from UART
-
-    if (*offset > 0) {
-        tty_put(tty);  // Release tty if we've already read
-        return 0;
-    }
-
-    // Copy the data buffer to user space
-    if (copy_to_user(buf, data_buffer, strlen(data_buffer))) {
-        tty_put(tty);  // Release tty on failure
-        return -EFAULT;
-    }
-
-    *offset += strlen(data_buffer);  // Update the offset
-    tty_put(tty);  // Release tty after use
-    return strlen(data_buffer);
-}
-
-// Write operation for /proc file
-static ssize_t proc_write(struct file *file, const char __user *buf, size_t count, loff_t *offset)
-{
-    struct tty_struct *tty;
-    tty = tty_get_by_name(UART_DEVICE);  // Get the UART device by its name
-
-    if (count > sizeof(data_buffer) - 1) {
-        tty_put(tty);  // Release tty if the data is too large
+    testfd = filp_open(UART_DEVICE, O_RDONLY, 0);
+    if (IS_ERR(testfd)) {
+        pr_err("Failed to open UART device: %ld\n", PTR_ERR(testfd));
         return -EINVAL;
     }
 
-    // Copy the user input to kernel space
-    if (copy_from_user(data_buffer, buf, count)) {
-        tty_put(tty);  // Release tty on failure
+    old_fs = get_fs();
+    set_fs(KERNEL_DS);  // Allow reading from user space addresses
+
+    bytes_read = kernel_read(testfd, read_proc_buffer, PROCFS_MAX_SIZE, &testfd->f_pos);
+    if (bytes_read < 0) {
+        pr_err("Failed to read from UART device\n");
+        set_fs(old_fs);  // Restore original address space
+        filp_close(testfd, NULL);
+        return -EINVAL;
+    }
+
+    set_fs(old_fs);  // Restore original address space
+    read_proc_buffer_size = bytes_read;
+    filp_close(testfd, NULL);
+
+    return bytes_read;
+}
+
+static ssize_t read_proc(struct file* file, char __user* user_buffer, size_t count, loff_t* offset)
+{
+    printk(KERN_INFO "Called read_proc\n");
+
+    if (*offset > 0 || count < PROCFS_MAX_SIZE) {
+        return 0;  // No more data to read
+    }
+
+    // Read data from the Arduino via UART
+    ssize_t bytes_read = uart_read_data();
+    if (bytes_read < 0) {
+        return bytes_read;  // Error during UART read
+    }
+
+    // Copy data to user space
+    if (copy_to_user(user_buffer, read_proc_buffer, read_proc_buffer_size)) {
         return -EFAULT;
     }
 
-    data_buffer[count] = '\0';  // Null-terminate the string
-
-    uart_send_data(tty, data_buffer);  // Send data to UART
-    tty_put(tty);  // Release tty after use
-
-    return count;
+    *offset = read_proc_buffer_size;
+    return read_proc_buffer_size;
 }
 
-// Define the proc_ops structure (used in newer kernels)
-static const struct proc_ops proc_fops = {
-    .proc_read = proc_read,
-    .proc_write = proc_write,
-};
-
-// Module initialization function
-static int __init sram_uart_module_init(void)
+static ssize_t write_proc(struct file* file, const char __user* user_buffer, size_t count, loff_t* offset)
 {
-    // Create a /proc entry for our module
-    proc_entry = proc_create(DEVICE_NAME, 0666, NULL, &proc_fops);
-    if (!proc_entry) {
-        pr_err("Failed to create /proc entry\n");
-        return -ENOMEM;  // Return error if /proc entry creation fails
+    printk(KERN_INFO "Called write_proc\n");
+
+    int tmp_len;
+    char *tmp = kzalloc(count + 1, GFP_KERNEL);
+
+    if (!tmp) {
+        return -ENOMEM;
     }
 
-    pr_info("SRAM UART Module Initialized\n");
+    // Copy data from user space
+    if (copy_from_user(tmp, user_buffer, count)) {
+        kfree(tmp);
+        return -EFAULT;
+    }
+
+    tmp_len = (count > PROCFS_MAX_SIZE) ? PROCFS_MAX_SIZE : count;
+    memcpy(&read_proc_buffer, tmp, tmp_len);
+    pr_info("write_proc: %s\n", read_proc_buffer);
+
+    // Send data to Arduino via UART
+    uart_send_data(read_proc_buffer);
+
+    read_proc_buffer_size = tmp_len;
+    kfree(tmp);
+    return tmp_len;
+}
+
+static const struct proc_ops hello_proc_fops = {
+    .proc_read = read_proc,
+    .proc_write = write_proc,
+};
+
+static int __init construct(void)
+{
+    proc_entry = proc_create("arduinouno", 0666, NULL, &hello_proc_fops);
+    if (!proc_entry) {
+        pr_err("Failed to create /proc/arduinouno\n");
+        return -ENOMEM;
+    }
+    pr_info("Loading 'arduinouno' module!\n");
     return 0;
 }
 
-// Module cleanup function
-static void __exit sram_uart_module_exit(void)
+static void __exit destruct(void)
 {
-    // Remove the /proc entry
-    if (proc_entry) {
-        proc_remove(proc_entry);
-    }
-
-    pr_info("SRAM UART Module Exited\n");
+    proc_remove(proc_entry);
+    pr_info("First kernel module has been removed\n");
 }
 
-module_init(sram_uart_module_init);
-module_exit(sram_uart_module_exit);
+module_init(construct);
+module_exit(destruct);
 
 MODULE_LICENSE("GPL");
 MODULE_AUTHOR("Your Name");
-MODULE_DESCRIPTION("A simple kernel module to interface with SRAM 23LCV512 via UART on Raspberry Pi");
+MODULE_DESCRIPTION("A simple kernel module to interface with Arduino Uno via UART");

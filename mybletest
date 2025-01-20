@@ -4,13 +4,13 @@ import mariadb
 
 # Database connection parameters
 DB_HOST = "localhost"
-DB_USER = "your_username"
-DB_PASSWORD = "your_password"
-DB_NAME = "your_database"
+DB_USER = "Daytoo"
+DB_PASSWORD = "Magnfacnt123"
+DB_NAME = "sensor_data"
 
 address = "d7:0b:cd:43:8c:fe"
-MODEL_NBR_UUID = "2A24"
-HR_NOTIFY_UUID = "2A37"
+MODEL_NBR_UUID = "00002a24-0000-1000-8000-00805f9b34fb"
+HR_NOTIFY_UUID = "00002a37-0000-1000-8000-00805f9b34fb"
 
 async def write_to_db(heart_rate):
     try:

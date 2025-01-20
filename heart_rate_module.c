@@ -10,14 +10,14 @@
 
 #define PROC_NAME "my_module"
 #define BUFFER_SIZE 256
-#define UART_DEVICE "/dev/tty0"  // UART device (adjust based on your Raspberry Pi model)
+#define UART_DEVICE "/dev/ttyAMA0"  // Raspberry Pi default UART device (might be ttyS0, check your system)
 
-// Structure to hold file information
+// Variables
 static struct proc_dir_entry *proc_entry;
 static char buffer[BUFFER_SIZE];
 static struct file *uart_file = NULL;
 
-// Function to generate random heart rate value (e.g., between 60 and 120)
+// Function to generate random heart rate value (between 60 and 120)
 int generate_random_heart_rate(void) {
     return (prandom_u32() % 61) + 60;  // Random number between 60 and 120
 }
@@ -32,7 +32,7 @@ int configure_uart(struct file *uart_file) {
         return -EINVAL;
     }
 
-    // Set baud rate (9600)
+    // Set baud rate to 9600
     cfsetispeed(&options, B9600);
     cfsetospeed(&options, B9600);
 
@@ -60,7 +60,7 @@ int configure_uart(struct file *uart_file) {
     return 0;
 }
 
-// Function to send data to the UART device
+// Function to send data to UART
 int send_data_to_uart(int heart_rate) {
     char send_buffer[256];
     int bytes_written;
@@ -98,7 +98,7 @@ static const struct proc_ops proc_fops = {
 
 // Module initialization
 static int __init hello_init(void) {
-    // Open UART device file (this could be /dev/ttyAMA0 or another serial device)
+    // Open UART device file (ttyAMA0 is commonly used on Raspberry Pi)
     uart_file = filp_open(UART_DEVICE, O_RDWR | O_NOCTTY | O_SYNC, 0);
     if (IS_ERR(uart_file)) {
         printk(KERN_ERR "Failed to open UART device\n");

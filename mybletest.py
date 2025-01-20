@@ -3,7 +3,7 @@ import mariadb
 from bleak import BleakClient
 
 # BLE device information
-address = "50:36:2C:B2:FF:83"
+address = "56:8B:56:A7:60:72"
 MODEL_NBR_UUID = "00002a24-0000-1000-8000-00805f9b34fb"
 HR_NOTIFY_UUID = "00002a37-0000-1000-8000-00805f9b34fb"
 

@@ -8,7 +8,7 @@ DB_USER = "Daytoo"
 DB_PASSWORD = "Magnfacnt123"
 DB_NAME = "lab3_table"
 
-address = "d7:0b:cd:43:8c:fe"
+address = "5A:0C:0E:A8:54:A2"
 MODEL_NBR_UUID = "00002a24-0000-1000-8000-00805f9b34fb"
 HR_NOTIFY_UUID = "00002a37-0000-1000-8000-00805f9b34fb"
 

@@ -6,7 +6,7 @@ import mariadb
 DB_HOST = "localhost"
 DB_USER = "Daytoo"
 DB_PASSWORD = "Magnfacnt123"
-DB_NAME = "sensor_data"
+DB_NAME = "lab3_table"
 
 address = "d7:0b:cd:43:8c:fe"
 MODEL_NBR_UUID = "00002a24-0000-1000-8000-00805f9b34fb"

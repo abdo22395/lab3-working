@@ -26,13 +26,30 @@ int generate_random_heart_rate(void) {
 }
 
 // Function to configure UART (9600 baud, 8N1)
-int configure_uart(struct tty_struct *tty) {
+int configure_uart(void) {
     struct termios options;
+    struct tty_struct *tty = NULL;
+    int ret;
+
+    // Open the UART device directly using kernel API (no user-space functions)
+    uart_file = filp_open(UART_DEVICE, O_RDWR | O_NOCTTY | O_SYNC, 0);
+    if (IS_ERR(uart_file)) {
+        printk(KERN_ERR "Failed to open UART device\n");
+        return PTR_ERR(uart_file);
+    }
+
+    tty = uart_file->f_inode->i_rdev;
+    if (!tty) {
+        printk(KERN_ERR "Failed to get tty struct\n");
+        filp_close(uart_file, NULL);
+        return -EINVAL;
+    }
 
     // Get current tty settings
-    if (tty_get_termios(tty, &options)) {
-        printk(KERN_ERR "Failed to get UART termios settings\n");
-        return -EINVAL;
+    ret = tty_get_termios(tty, &options);
+    if (ret) {
+        printk(KERN_ERR "Failed to get termios\n");
+        return ret;
     }
 
     // Set baud rate to 9600 (B9600 in kernel space)
@@ -55,9 +72,10 @@ int configure_uart(struct tty_struct *tty) {
     options.c_iflag &= ~(IXON | IXOFF | IXANY);
 
     // Set the new termios settings for UART
-    if (tty_set_termios(tty, &options)) {
-        printk(KERN_ERR "Failed to set UART termios settings\n");
-        return -EINVAL;
+    ret = tty_set_termios(tty, &options);
+    if (ret) {
+        printk(KERN_ERR "Failed to set termios\n");
+        return ret;
     }
 
     return 0;
@@ -101,33 +119,19 @@ static const struct proc_ops proc_fops = {
 
 // Module initialization
 static int __init hello_init(void) {
-    // Open UART device file (ttyAMA0 is commonly used on Raspberry Pi)
-    uart_file = filp_open(UART_DEVICE, O_RDWR | O_NOCTTY | O_SYNC, 0);
-    if (IS_ERR(uart_file)) {
-        printk(KERN_ERR "Failed to open UART device\n");
-        return PTR_ERR(uart_file);
-    }
+    int ret;
 
-    // Get tty struct for the device (used for configuring UART)
-    tty = tty_port_tty_get(&uart_file->f_inode->i_rdev);
-    if (!tty) {
-        printk(KERN_ERR "Failed to get tty struct\n");
-        filp_close(uart_file, NULL);
-        return -EINVAL;
-    }
-
-    // Configure the UART
-    if (configure_uart(tty) != 0) {
-        tty_kref_put(tty);
-        filp_close(uart_file, NULL);
-        return -EINVAL;
+    // Configure the UART (9600 baud, 8N1)
+    ret = configure_uart();
+    if (ret) {
+        printk(KERN_ERR "Failed to configure UART\n");
+        return ret;
     }
 
     // Create /proc entry for reading heart rate
     proc_entry = proc_create(PROC_NAME, 0, NULL, &proc_fops);
     if (proc_entry == NULL) {
         printk(KERN_ALERT "Failed to create /proc/%s\n", PROC_NAME);
-        tty_kref_put(tty);
         filp_close(uart_file, NULL);
         return -ENOMEM;
     }
@@ -139,7 +143,6 @@ static int __init hello_init(void) {
 // Module cleanup
 static void __exit hello_exit(void) {
     proc_remove(proc_entry);
-    tty_kref_put(tty);  // Decrement tty reference count
     filp_close(uart_file, NULL);
     printk(KERN_INFO "/proc/%s removed\n", PROC_NAME);
 }

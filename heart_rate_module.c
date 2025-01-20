@@ -3,7 +3,7 @@
 #include <linux/kernel.h>
 #include <linux/proc_fs.h>
 #include <linux/uaccess.h>
-#include <linux/random.h>
+#include <linux/random.h>  // For get_random_u32()
 #include <linux/fs.h>
 #include <linux/termios.h>
 #include <linux/delay.h>
@@ -19,7 +19,7 @@ static struct file *uart_file = NULL;
 
 // Function to generate random heart rate value (between 60 and 120)
 int generate_random_heart_rate(void) {
-    return (prandom_u32() % 61) + 60;  // Random number between 60 and 120
+    return (get_random_u32() % 61) + 60;  // Random number between 60 and 120
 }
 
 // Function to configure UART (9600 baud, 8N1)

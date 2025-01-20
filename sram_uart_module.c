@@ -30,6 +30,59 @@ static ssize_t read_proc(struct file *file, char __user *user_buffer,
 {
     printk(KERN_INFO "Called read_proc\n");
 
+    /* Return 0 (EOF) if already read or if count is too small for buffer */
+    if (*offset > 0 || count < PROCFS_MAX_SIZE) {
+        return 0;
+    }
+
+    /* Open the UART device */
+    struct file* uart_file = filp_open("/dev/ttyACM0", O_RDONLY, 0);
+    if (IS_ERR(uart_file)) {
+        printk(KERN_ERR "Failed to open UART device: %ld\n", PTR_ERR(uart_file));
+        return -EFAULT;
+    }
+
+    /* Clear any leftover data in the UART buffer */
+    ssize_t nread = 0;
+    char buf[PROCFS_MAX_SIZE] = {0};
+
+    /* Optionally, clear out any previous data */
+    if (kernel_read(uart_file, buf, PROCFS_MAX_SIZE, &uart_file->f_pos) < 0) {
+        printk(KERN_ERR "Failed to read from UART device.\n");
+        filp_close(uart_file, NULL);
+        return -EFAULT;
+    }
+
+    /* Read new data from the UART device */
+    nread = kernel_read(uart_file, buf, PROCFS_MAX_SIZE, &uart_file->f_pos);
+
+    /* Close the UART file */
+    filp_close(uart_file, NULL);
+
+    if (nread < 0) {
+        printk(KERN_ERR "Error reading from UART device: %zd\n", nread);
+        return -EFAULT;
+    }
+
+    /* Copy the data from the kernel buffer to user space */
+    if (copy_to_user(user_buffer, buf, nread)) {
+        return -EFAULT;
+    }
+
+    /* Update the offset so subsequent reads return EOF */
+    *offset = nread;
+
+    /* Return the number of bytes read */
+    return nread;
+}
+
+
+
+static ssize_t read_proc(struct file *file, char __user *user_buffer,
+                         size_t count, loff_t *offset)
+{
+    printk(KERN_INFO "Called read_proc\n");
+
     // Return 0 (EOF) if already read or if count is too small for buffer
     if (*offset > 0 || count < PROCFS_MAX_SIZE) {
         return 0;
@@ -71,87 +124,6 @@ static ssize_t read_proc(struct file *file, char __user *user_buffer,
     // Return the number of bytes read
     return total_read;
 }
-Explanation of Kernel Update:
-Flush UART Buffer: Before attempting to read new data, we discard the previous data in the UART buffer by reading and ignoring a chunk of data (discard_buffer).
-Reading Fresh Data: After flushing the UART buffer, the kernel module reads new data into uart_buffer and then copies it to user-space.
-3. User-Space Program Check
-Make sure the user-space program is reading correctly from /proc/arduinouno and printing the data. Here’s a quick check for that:
-
-c
-Copy
-#include <stdio.h>
-#include <stdlib.h>
-#include <string.h>
-#include <unistd.h>
-
-#define PROC_PATH "/proc/arduinouno"
-
-int main() {
-    char read_buffer[1024];  // Increased buffer size
-    FILE *proc_file;
-
-    while (1) {
-        // Open /proc/arduinouno for reading
-        proc_file = fopen(PROC_PATH, "r");
-        if (proc_file == NULL) {
-            perror("Failed to open /proc/arduinouno for reading");
-            return 1;
-        }
-
-        // Read all available data from the kernel module (until EOF)
-        size_t bytes_read = fread(read_buffer, 1, sizeof(read_buffer) - 1, proc_file);
-        read_buffer[bytes_read] = '\0';  // Null-terminate the string
-
-        if (bytes_read > 0) {
-            printf("Read data from UART: %s\n", read_buffer);
-        } else {
-            printf("No data read from UART.\n");
-        }
-
-        fclose(proc_file);
-
-        // Sleep for a bit before the next read
-        sleep(2);
-    }
-
-    return 0;
-}
-
-
-static ssize_t write_proc(struct file* file, const char __user* user_buffer,
-                          size_t count, loff_t* offset)
-{
-    printk(KERN_INFO "Called write_proc\n");
-
-    char *tmp = kzalloc(count + 1, GFP_KERNEL);
-    if (!tmp)
-        return -ENOMEM;
-
-    if (copy_from_user(tmp, user_buffer, count)) {
-        kfree(tmp);
-        return -EFAULT;
-    }
-
-        // Start of Arduino Write thingy
-        struct file* testfd = filp_open("/dev/ttyACM0",O_RDWR,0);
-
-
-        ssize_t wr = kernel_write(testfd, tmp, count + 1, offset);
-
-        filp_close(testfd, NULL);
-
-        // End of Arduino Write thingy*/
-
-    size_t write_len = (count > PROCFS_MAX_SIZE) ? PROCFS_MAX_SIZE : count;
-    memcpy(read_proc_buffer, tmp, write_len);
-    read_proc_buffer_size = write_len;
-
-    kfree(tmp);
-
-
-    return write_len;
-}
-
 
 static const struct proc_ops hello_proc_fops = {
   .proc_read = read_proc,

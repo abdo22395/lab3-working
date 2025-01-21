@@ -14,12 +14,25 @@ static ssize_t read_proc_file(struct file *file, char __user *user_buffer,
 {
     printk(KERN_INFO "Read operation initiated\n");
 
-    // Return 0 (EOF) if we have already read the file or if the buffer is too small
+    // If we have already read the file or if the buffer is too small, return 0 (EOF)
     if (*offset > 0 || count < PROCFS_BUFFER_SIZE) {
         return 0;
     }
 
-    // Read the data in the proc_buffer into the user space buffer
+    // For demonstration purposes, we’ll simulate a read from SRAM.
+    // In a real scenario, you'd read from SRAM here.
+    // Assuming `proc_buffer` contains data like text or numbers to return.
+
+    // Check if the buffer contains text or numbers
+    if (isalpha(proc_buffer[0])) {
+        // If the first byte is a letter, treat it as text
+        printk(KERN_INFO "Returning text data: %s\n", proc_buffer);
+    } else {
+        // If the first byte is a digit, treat it as a number
+        printk(KERN_INFO "Returning number data: %s\n", proc_buffer);
+    }
+
+    // Copy the contents of proc_buffer into the user buffer
     if (copy_to_user(user_buffer, proc_buffer, buffer_size)) {
         return -EFAULT;
     }
@@ -52,7 +65,7 @@ static ssize_t write_proc_file(struct file* file, const char __user* user_buffer
     // Update buffer_size with the actual number of bytes written
     buffer_size = count;
 
-    // Print the data received for debugging purposes
+    // Print the received data to the kernel log
     printk(KERN_INFO "Received data: %s\n", proc_buffer);
 
     // In this case, we don't process the data further, but you could write it to /dev/ttyACM0

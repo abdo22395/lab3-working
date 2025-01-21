@@ -43,21 +43,26 @@ static ssize_t read_proc(struct file *file, char __user *user_buffer,
 
     // Return 0 (EOF) if already read or if count is too small for buffer
     if (*offset > 0 || count < PROCFS_MAX_SIZE) {
+        printk(KERN_INFO "Returning EOF or buffer size too small\n");
         return 0;
     }
 
     // Open the UART device
     struct file* uart_file = filp_open("/dev/ttyACM0", O_RDONLY, 0);
     if (IS_ERR(uart_file)) {
-        printk(KERN_ERR "Failed to open UART device: %ld\n", PTR_ERR(uart_file));
-        return PTR_ERR(uart_file);  // Return the actual error code
+        long err_code = PTR_ERR(uart_file);
+        printk(KERN_ERR "Failed to open UART device: %ld\n", err_code);
+        return err_code;  // Return the actual error code for better debugging
     }
+
+    // Optional: Small delay to ensure UART is ready to be read
+    msleep(50);
 
     // Clear any leftover data in the UART buffer by reading a chunk of data
     char discard_buffer[PROCFS_MAX_SIZE] = {0};
-    ssize_t discard_bytes = kernel_read(uart_file, discard_buffer, PROCFS_MAX_SIZE, &uart_file->f_pos);  // Discard data
+    ssize_t discard_bytes = kernel_read(uart_file, discard_buffer, PROCFS_MAX_SIZE, &uart_file->f_pos);
     if (discard_bytes < 0) {
-        printk(KERN_ERR "Failed to discard UART data\n");
+        printk(KERN_ERR "Failed to discard UART data: %ld\n", discard_bytes);
         filp_close(uart_file, NULL);
         return discard_bytes;
     }
@@ -97,7 +102,6 @@ static ssize_t read_proc(struct file *file, char __user *user_buffer,
     // Return the number of bytes read
     return total_read;
 }
-
 // The write function for the proc file
 static ssize_t write_proc(struct file* file, const char __user* user_buffer,
                           size_t count, loff_t* offset) {

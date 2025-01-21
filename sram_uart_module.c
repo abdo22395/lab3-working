@@ -6,7 +6,7 @@
 #include <linux/kernel.h>
 #include <linux/random.h>
 
-#define PROCFS_BUFFER_SIZE  256  // Increased buffer size to handle more data
+#define PROCFS_BUFFER_SIZE  256  // Increased buffer size to handle large strings
 static char proc_buffer[PROCFS_BUFFER_SIZE];
 static unsigned long buffer_size = 0;
 
@@ -19,7 +19,6 @@ static ssize_t read_proc_file(struct file *file, char __user *user_buffer,
 {
     printk(KERN_INFO "Read operation initiated\n");
 
-    // Return 0 (EOF) if we have already read the file or if the buffer is too small
     if (*offset > 0 || count < PROCFS_BUFFER_SIZE) {
         return 0;
     }
@@ -58,7 +57,6 @@ static ssize_t write_proc_file(struct file* file, const char __user* user_buffer
 {
     printk(KERN_INFO "Write operation initiated\n");
 
-    // Ensure that the data does not exceed the buffer size
     if (count > PROCFS_BUFFER_SIZE) {
         return -EINVAL;
     }
@@ -73,30 +71,46 @@ static ssize_t write_proc_file(struct file* file, const char __user* user_buffer
 
     printk(KERN_INFO "Received data: %s\n", proc_buffer);
 
-    // If the command is WRITE, write random data to /dev/ttyACM0
-    if (strncmp(proc_buffer, "WRITE", 5) == 0) {
-        // Generate random data to send to /dev/ttyACM0
-        char random_data[32];
-        get_random_bytes(random_data, sizeof(random_data));  // Generate random bytes
+    // Trim leading spaces or newline characters from the user input
+    char *trimmed_input = proc_buffer;
+    while (*trimmed_input == ' ' || *trimmed_input == '\n') {
+        trimmed_input++;
+    }
 
-        // Open the device file /dev/ttyACM0 for writing
+    // Check if the input is a WRITE command
+    if (strncmp(trimmed_input, "WRITE", 5) == 0) {
+        const char *write_string = "Sending random data to UART";
+
+        // Generate random data
+        char random_data[32];
+        get_random_bytes(random_data, sizeof(random_data));
+
+        // Open /dev/ttyACM0 for writing
         struct file* device_file = filp_open("/dev/ttyACM0", O_RDWR, 0);
         if (IS_ERR(device_file)) {
             printk(KERN_ERR "Failed to open /dev/ttyACM0: %ld\n", PTR_ERR(device_file));
             return -EFAULT;
         }
 
-        // Write the random data to /dev/ttyACM0
         ssize_t bytes_written = kernel_write(device_file, random_data, sizeof(random_data), offset);
         filp_close(device_file, NULL);
 
         printk(KERN_INFO "Written random data to /dev/ttyACM0\n");
 
-        // Simulate the data being read from /dev/ttyACM0
+        // Simulate reading the data back into proc_buffer
         snprintf(proc_buffer, PROCFS_BUFFER_SIZE, "%s", random_data);
-        buffer_size = sizeof(random_data);
-    } else {
-        printk(KERN_INFO "Invalid command, only WRITE is supported.\n");
+        buffer_size = strlen(proc_buffer);
+    } 
+    // Check if the input is a READ command
+    else if (strncmp(trimmed_input, "READ", 4) == 0) {
+        // Simulate reading data from /dev/ttyACM0
+        const char *read_string = "Simulated UART data from READ command";
+        snprintf(proc_buffer, PROCFS_BUFFER_SIZE, "%s", read_string);
+        buffer_size = strlen(proc_buffer);
+        printk(KERN_INFO "Simulated UART read: %s\n", read_string);
+    } 
+    else {
+        printk(KERN_INFO "Invalid command, only WRITE and READ are supported.\n");
     }
 
     return count;

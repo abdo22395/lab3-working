@@ -75,7 +75,7 @@ static ssize_t read_proc_file(struct file *file, char __user *user_buffer,
         printk(KERN_INFO "Sent READ command to UART: %s\n", read_command);
 
         // Set the flag to prevent further writes
-        written_once = true;
+        written_once = false;
     }
 
     // Add a delay (e.g., 100ms) before reading the UART response

@@ -56,51 +56,55 @@ static ssize_t read_proc(struct file *file, char __user *user_buffer,
     }
 
     // Optional: Small delay to ensure UART is ready to be read
+    msleep(50);
 
-    // Clear any leftover data in the UART buffer by reading a chunk of data
-    char discard_buffer[PROCFS_MAX_SIZE] = {0};
-    ssize_t discard_bytes = kernel_read(uart_file, discard_buffer, PROCFS_MAX_SIZE, &uart_file->f_pos);
-    if (discard_bytes < 0) {
-        printk(KERN_ERR "Failed to discard UART data: %ld\n", discard_bytes);
+    // Get the tty structure associated with the UART device
+    struct tty_struct *tty = uart_file->f_inode->i_private;
+    if (!tty) {
+        printk(KERN_ERR "UART device does not have an associated tty struct\n");
         filp_close(uart_file, NULL);
-        return discard_bytes;
+        return -ENODEV;
     }
 
-    // Now read fresh data from the UART
-    char uart_buffer[PROCFS_MAX_SIZE] = {0};
-    ssize_t total_read = 0;
-    ssize_t bytes_read;
-    
-    // Loop until we read the required data or no more data is available
-    while (total_read < PROCFS_MAX_SIZE) {
-        bytes_read = kernel_read(uart_file, uart_buffer + total_read, PROCFS_MAX_SIZE - total_read, &uart_file->f_pos);
-        
-        if (bytes_read <= 0) {
-            if (bytes_read == 0) {
-                printk(KERN_INFO "No more data available in UART buffer\n");
-            } else {
-                printk(KERN_ERR "Error reading from UART: %ld\n", bytes_read);
-            }
-            break;  // Exit if no more data is available
+    unsigned char uart_buffer[PROCFS_MAX_SIZE] = {0};
+    ssize_t bytes_read = 0;
+
+    // Check if the tty device is ready and can be read from
+    if (tty && tty->ops && tty->ops->read) {
+        // Read data directly from the UART device via the tty structure
+        bytes_read = tty->ops->read(tty, uart_buffer, PROCFS_MAX_SIZE);
+        if (bytes_read < 0) {
+            printk(KERN_ERR "Failed to read from UART device via tty: %ld\n", bytes_read);
+            filp_close(uart_file, NULL);
+            return bytes_read;
         }
-        
-        total_read += bytes_read;
+    } else {
+        printk(KERN_ERR "No valid tty read operation available\n");
+        filp_close(uart_file, NULL);
+        return -EINVAL;
     }
 
     filp_close(uart_file, NULL);
 
     // Copy the data from the kernel buffer to user-space
-    if (copy_to_user(user_buffer, uart_buffer, total_read)) {
+    if (copy_to_user(user_buffer, uart_buffer, bytes_read)) {
         printk(KERN_ERR "Failed to copy data to user-space\n");
         return -EFAULT;
     }
 
     // Update the offset to return EOF for subsequent reads
-    *offset = total_read;
+    *offset = bytes_read;
 
     // Return the number of bytes read
-    return total_read;
+    return bytes_read;
+
 }
+
+
+
+
+
+
 // The write function for the proc file
 static ssize_t write_proc(struct file* file, const char __user* user_buffer,
                           size_t count, loff_t* offset) {

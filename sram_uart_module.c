@@ -9,105 +9,89 @@
 #include <linux/fcntl.h>
 #include <linux/errno.h>
 
+#define BUFFER_SIZE 5
+#define SERIAL_DEVICE "/dev/ttyACM0"
+#define PROCFS_MAX_LENGTH 20
 
+static struct proc_dir_entry* proc_file;
+static char proc_buffer[PROCFS_MAX_LENGTH];
+static unsigned long proc_buffer_size = 0;
 
-// Christoffer Angestam, Mattias Carlsén Friberg
-
-
-/*
-
-Try reading with 'cat /proc/arduinouno'
-
-Try writing with ' echo 'hello' >> /proc/arduinouno'
-
-*/
-
-#define MESSAGE_LENGTH 5
-#define SERIAL_PORT_ARDUINO "/dev/ttyACM0"
-#define PROCFS_MAX_SIZE 20
-
-static struct proc_dir_entry* proc_entry;
-static char read_proc_buffer[PROCFS_MAX_SIZE];
-static unsigned long read_proc_buffer_size = 0;
-
-static ssize_t read_proc(struct file* file, char __user* user_buffer, size_t count, loff_t* offset)
+static ssize_t proc_read(struct file* file, char __user* user_buffer, size_t count, loff_t* offset)
 {
-    
-    // create file, offset and how many bytes have been read.
-    struct file *serial_file;
+    struct file *serial_device_file;
     loff_t serial_offset = 0;
     ssize_t bytes_read;
-    char buffer[PROCFS_MAX_SIZE] = {0};
+    char temp_buffer[PROCFS_MAX_LENGTH] = {0};
 
-    printk(KERN_INFO "Called read_proc\n");
-    if (*offset > 0 || count < PROCFS_MAX_SIZE){
+    printk(KERN_INFO "Invoked proc_read\n");
+    if (*offset > 0 || count < PROCFS_MAX_LENGTH){
         return 0;
     }
 
-    // open a serial port to communicate with arduino
-    serial_file = filp_open(SERIAL_PORT_ARDUINO, O_RDWR, 0);
+    // Open the serial device for communication
+    serial_device_file = filp_open(SERIAL_DEVICE, O_RDWR, 0);
     ssleep(1); 
-    if(IS_ERR(serial_file))
+    if(IS_ERR(serial_device_file))
     {
-        printk(KERN_ERR "Failed to open serial port\n");
-        return PTR_ERR(serial_file);
+        printk(KERN_ERR "Failed to open serial device\n");
+        return PTR_ERR(serial_device_file);
     }
 
-    // read the file and put it into read_proc_buffer
-    bytes_read = kernel_read(serial_file, &buffer, PROCFS_MAX_SIZE, NULL);   //&serial_offset
+    // Read data from the serial device into temp_buffer
+    bytes_read = kernel_read(serial_device_file, &temp_buffer, PROCFS_MAX_LENGTH, NULL);
     ssleep(1);
 
     printk("%ld", bytes_read);
-    // close the communication with the arduino
-    filp_close(serial_file, NULL);
+    // Close the serial device connection
+    filp_close(serial_device_file, NULL);
     
-    read_proc_buffer_size = bytes_read;
+    proc_buffer_size = bytes_read;
    
-    // check so that it managed to read
+    // Check if reading was successful
     if(bytes_read < 0)
     {
-        printk(KERN_INFO "Error reading from serial port\n");
+        printk(KERN_INFO "Error reading from serial device\n");
         return bytes_read;
     }
 
-    
-    printk(KERN_INFO "Recived from serial port: %s\n" , read_proc_buffer);
+    printk(KERN_INFO "Received from serial device: %s\n" , proc_buffer);
 
-    int ret = copy_to_user(user_buffer, read_proc_buffer, read_proc_buffer_size);
+    int ret = copy_to_user(user_buffer, proc_buffer, proc_buffer_size);
     if(ret != 0)
     {
-        printk(KERN_ERR "Failed to copy to user\n");
+        printk(KERN_ERR "Failed to copy data to user space\n");
         return -EFAULT;
     }
-    printk(KERN_INFO "copied to user\n");
-    // clear the buffer
-    memset(read_proc_buffer, 0, sizeof(read_proc_buffer));
-    // uppdate the offset and return number of bytes
+    printk(KERN_INFO "Data copied to user space\n");
+
+    // Clear the buffer
+    memset(proc_buffer, 0, sizeof(proc_buffer));
+
+    // Update the offset and return the number of bytes
     if(*offset > 0)
     {
         return 0;
     }
 
-    *offset = read_proc_buffer_size;
-    return read_proc_buffer_size;
-    
+    *offset = proc_buffer_size;
+    return proc_buffer_size;
 }   
 
-static ssize_t write_proc(struct file* file, const char __user* user_buffer, size_t count, loff_t* offset)
+static ssize_t proc_write(struct file* file, const char __user* user_buffer, size_t count, loff_t* offset)
 {
-    
-    struct file *serial_file;
-    char *kernel_buffer; // create a buffer to temporarily store the string to be written in.
+    struct file *serial_device_file;
+    char *kernel_buffer; 
     ssize_t bytes_written;
     loff_t serial_offset = 0;
-    int kern_buff_len;
-    printk(KERN_INFO "Called write_proc\n");
+    int kernel_buffer_length;
 
+    printk(KERN_INFO "Invoked proc_write\n");
 
-    // check so that it doesnt write anything bigger than what is allowed
-    if(count > sizeof(read_proc_buffer) - 1)
+    // Check if the write size exceeds the allowed limit
+    if(count > sizeof(proc_buffer) - 1)
     {
-        printk(KERN_ERR "Writing size to large\n");
+        printk(KERN_ERR "Write size is too large\n");
         return -EINVAL; 
     }
 
@@ -123,82 +107,77 @@ static ssize_t write_proc(struct file* file, const char __user* user_buffer, siz
         return -EFAULT;
     }
     kernel_buffer[count] = '\0';
-    printk("count is: %ld", count);
+    printk("Write count is: %ld", count);
 
-    // copy the read_proc_buffer into the kernle buffer
-    strncpy(read_proc_buffer, kernel_buffer, count);
-    read_proc_buffer_size = count;
+    // Copy the data into the proc_buffer
+    strncpy(proc_buffer, kernel_buffer, count);
+    proc_buffer_size = count;
 
-    // print what was written.
-
-    // open the serial to the arduino
-    serial_file = filp_open(SERIAL_PORT_ARDUINO , O_RDWR, 0);
+    // Open the serial device for communication
+    serial_device_file = filp_open(SERIAL_DEVICE , O_RDWR, 0);
     ssleep(1);
-    if(IS_ERR(serial_file))
+    if(IS_ERR(serial_device_file))
     {
-        printk(KERN_ERR "Failed to open serial port\n");
+        printk(KERN_ERR "Failed to open serial device\n");
         kfree(kernel_buffer);
-        return PTR_ERR(serial_file);
+        return PTR_ERR(serial_device_file);
     }
 
-    // write to the arduino
-    bytes_written = kernel_write(serial_file, kernel_buffer, count , NULL);
+    // Write data to the serial device
+    bytes_written = kernel_write(serial_device_file, kernel_buffer, count , NULL);
     ssleep(1);
-    filp_close(serial_file, NULL);
+    filp_close(serial_device_file, NULL);
     
-    kern_buff_len = PROCFS_MAX_SIZE;
-    if(count > PROCFS_MAX_SIZE)
+    kernel_buffer_length = PROCFS_MAX_LENGTH;
+    if(count > PROCFS_MAX_LENGTH)
     {
-        kern_buff_len = count;
+        kernel_buffer_length = count;
     }
 
-    // clear the buffer 
-    memcpy(&read_proc_buffer, kernel_buffer, kern_buff_len);
-    printk(KERN_INFO "Writing to serial port: %s\n", read_proc_buffer);
-    // check so that the amount of bytes written checks out with how many should be written.
+    // Clear the buffer
+    memcpy(&proc_buffer, kernel_buffer, kernel_buffer_length);
+    printk(KERN_INFO "Writing to serial device: %s\n", proc_buffer);
+
+    // Check if the correct number of bytes were written
     if(bytes_written < 0)
     {
-        printk(KERN_ERR "Error writing to serial port\n");
+        printk(KERN_ERR "Error writing to serial device\n");
         return bytes_written;
     }
     if(bytes_written != count)
     {
-        printk(KERN_ERR "Only partial writing to the serial port");
+        printk(KERN_ERR "Only partial data written to serial device\n");
         return -EIO;
     }
-    read_proc_buffer_size = kern_buff_len;
+    proc_buffer_size = kernel_buffer_length;
     kfree(kernel_buffer); 
 
     *offset = bytes_written;
-    return kern_buff_len;
-    
-
+    return kernel_buffer_length;
 }
 
-static const struct proc_ops hello_proc_fops = {
-    .proc_read = read_proc, 
-    .proc_write = write_proc,
+static const struct proc_ops proc_file_operations = {
+    .proc_read = proc_read, 
+    .proc_write = proc_write,
 };
 
-
-static int __init construct(void) {
-    proc_entry = proc_create("arduinouno", 0666, NULL, &hello_proc_fops);
-    if(!proc_entry)
+static int __init module_init_func(void) {
+    proc_file = proc_create("arduinouno", 0666, NULL, &proc_file_operations);
+    if(!proc_file)
     {
         printk(KERN_ERR "Failed to create /proc/arduinouno\n");
         return -ENOMEM;
     }
-    pr_info("Loading 'arduinouno' module JAAA!\n");
+    pr_info("Module 'arduinouno' loaded successfully!\n");
     return 0;
 }
 
-static void __exit destruct(void) {
-    proc_remove(proc_entry);
-    pr_info("First kernel module has been removed\n");
+static void __exit module_exit_func(void) {
+    proc_remove(proc_file);
+    pr_info("Kernel module removed successfully\n");
 }
 
-module_init(construct);
-module_exit(destruct);
+module_init(module_init_func);
+module_exit(module_exit_func);
 
-/* Obligatorisk GPL licens för allt relaterat till kerneln, även om vi skapar för eget bruk */
 MODULE_LICENSE("GPL");

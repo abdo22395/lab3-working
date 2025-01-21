@@ -2,71 +2,89 @@
 #include <linux/module.h>
 #include <linux/uaccess.h>
 #include <linux/fs.h>
-#include <linux/proc_fs.h>
 #include <linux/serial.h>
 #include <linux/tty.h>
-#include <linux/termios.h>
-#include <linux/tty_flip.h>
 #include <linux/slab.h>
+#include <linux/random.h>
 
-#define PROCFS_MAX_SIZE 20
-#define UART_DEV "/dev/ttyACM0"  // UART device for Arduino
+#define PROCFS_MAX_SIZE  20
+#define RANDOM_DATA_SIZE 10
 
-static struct proc_dir_entry* proc_entry;
 static char read_proc_buffer[PROCFS_MAX_SIZE];
 static unsigned long read_proc_buffer_size = 0;
 
-// Function to open the UART device
-static struct file* open_uart_device(void) {
-    struct file* uart_file = filp_open(UART_DEV, O_RDWR, 0);
-    if (IS_ERR(uart_file)) {
-        printk(KERN_ERR "Failed to open UART device %ld\n", PTR_ERR(uart_file));
-        return NULL;
-    }
-    return uart_file;
-}
+// Function to generate random data and write it to the UART device
+static ssize_t write_proc(struct file *file, const char __user *user_buffer,
+                          size_t count, loff_t *offset)
+{
+    struct file *uart_file = NULL;
+    ssize_t bytes_written = 0;
+    char random_data[RANDOM_DATA_SIZE];
+    struct tty_struct *tty = NULL;
 
-// Function to write data to the UART device
-static ssize_t write_to_uart(struct file* uart_file, const char *data, size_t len) {
-    ssize_t bytes_written = kernel_write(uart_file, data, len, &uart_file->f_pos);
+    printk(KERN_INFO "Called write_proc\n");
+
+    // Generate random data
+    get_random_bytes(random_data, RANDOM_DATA_SIZE);
+
+    // Open the UART device for writing
+    uart_file = filp_open("/dev/ttyACM0", O_WRONLY, 0);
+    if (IS_ERR(uart_file)) {
+        long err_code = PTR_ERR(uart_file);
+        printk(KERN_ERR "Failed to open UART device for writing: %ld\n", err_code);
+        return err_code;
+    }
+
+    // Get the tty struct from the UART device file
+    tty = uart_file->f_inode->i_private;
+
+    // Check if the tty driver supports write operations
+    if (tty->driver && tty->driver->ops && tty->driver->ops->write) {
+        // Write the random data to the UART device
+        bytes_written = tty->driver->ops->write(tty, random_data, RANDOM_DATA_SIZE);
+        if (bytes_written < 0) {
+            printk(KERN_ERR "Failed to write random data to UART device: %ld\n", bytes_written);
+            filp_close(uart_file, NULL);
+            return bytes_written;
+        }
+    } else {
+        printk(KERN_ERR "No valid tty write operation available\n");
+        filp_close(uart_file, NULL);
+        return -EINVAL;
+    }
+
+    printk(KERN_INFO "Written random data to UART: %.*s\n", RANDOM_DATA_SIZE, random_data);
+
+    // Close the UART device after writing
+    filp_close(uart_file, NULL);
+
     return bytes_written;
 }
 
-// Function to read data from the UART device
-static ssize_t read_from_uart(struct file* uart_file, char *buffer, size_t len) {
-    ssize_t bytes_read = kernel_read(uart_file, buffer, len, &uart_file->f_pos);
-    return bytes_read;
-}
-
-
-
-
-
-
+// Function to read data from the UART device and copy it to user-space
 static ssize_t read_proc(struct file *file, char __user *user_buffer,
                          size_t count, loff_t *offset)
 {
     struct file* uart_file = NULL;
     struct tty_struct *tty = NULL;
     ssize_t bytes_read = 0;
-    
+
     printk(KERN_INFO "Called read_proc\n");
 
     // Return 0 (EOF) if already read or if count is too small for buffer
     if (*offset > 0 || count < PROCFS_MAX_SIZE) {
-        printk(KERN_INFO "Returning EOF or buffer size too small\n");
         return 0;
     }
 
-    // Open the UART device
+    // Open the UART device for reading
     uart_file = filp_open("/dev/ttyACM0", O_RDONLY, 0);
     if (IS_ERR(uart_file)) {
         long err_code = PTR_ERR(uart_file);
         printk(KERN_ERR "Failed to open UART device: %ld\n", err_code);
-        return err_code;  // Return the actual error code for better debugging
+        return err_code;
     }
 
-    // Get the tty structure associated with the UART device
+    // Get the tty struct associated with the UART device
     tty = uart_file->f_inode->i_private;
     if (!tty) {
         printk(KERN_ERR "UART device does not have an associated tty struct\n");
@@ -74,16 +92,24 @@ static ssize_t read_proc(struct file *file, char __user *user_buffer,
         return -ENODEV;
     }
 
-    // Read data directly from the UART device
-    bytes_read = tty->driver->receive_buf(tty, read_proc_buffer, PROCFS_MAX_SIZE);
+    // Check if the tty driver supports read operations
+    if (tty->driver && tty->driver->ops && tty->driver->ops->read) {
+        // Read data directly from the UART device
+        bytes_read = tty->driver->ops->read(tty, read_proc_buffer, PROCFS_MAX_SIZE);
 
-    // Check if data was read successfully
-    if (bytes_read < 0) {
-        printk(KERN_ERR "Failed to read from UART device via tty: %ld\n", bytes_read);
+        // Check for errors in reading
+        if (bytes_read < 0) {
+            printk(KERN_ERR "Failed to read from UART device via tty: %ld\n", bytes_read);
+            filp_close(uart_file, NULL);
+            return bytes_read;
+        }
+    } else {
+        printk(KERN_ERR "No valid tty read operation available\n");
         filp_close(uart_file, NULL);
-        return bytes_read;
+        return -EINVAL;
     }
 
+    // Close the UART device after reading
     filp_close(uart_file, NULL);
 
     // Copy the data from the kernel buffer to user-space
@@ -99,64 +125,23 @@ static ssize_t read_proc(struct file *file, char __user *user_buffer,
     return bytes_read;
 }
 
-
-
-
-
-
-// The write function for the proc file
-static ssize_t write_proc(struct file* file, const char __user* user_buffer,
-                          size_t count, loff_t* offset) {
-    printk(KERN_INFO "Called write_proc\n");
-
-    char buffer[PROCFS_MAX_SIZE];
-    if (count > PROCFS_MAX_SIZE) {
-        count = PROCFS_MAX_SIZE;
-    }
-
-    // Copy data from user space
-    if (copy_from_user(buffer, user_buffer, count)) {
-        return -EFAULT;
-    }
-
-    // Open the UART device
-    struct file* uart_file = open_uart_device();
-    if (!uart_file) {
-        return -EFAULT;
-    }
-
-    // Send data to the Arduino via UART
-    ssize_t bytes_written = write_to_uart(uart_file, buffer, count);
-    if (bytes_written < 0) {
-        filp_close(uart_file, NULL);
-        return -EFAULT;
-    }
-
-    filp_close(uart_file, NULL);
-    return count;
-}
-
+// Define the file operations structure
 static const struct proc_ops hello_proc_fops = {
     .proc_read = read_proc,
-    .proc_write = write_proc,
+    .proc_write = write_proc,  // Add support for writing
 };
 
+// Module initialization
 static int __init construct(void) {
-    // Create the /proc/arduinouno entry
-    proc_entry = proc_create("arduinouno", 0666, NULL, &hello_proc_fops);
-    if (!proc_entry) {
-        printk(KERN_ERR "Failed to create /proc/arduinouno\n");
-        return -ENOMEM;
-    }
-
-    printk(KERN_INFO "Loading 'arduinouno' module!\n");
+    proc_create("arduinouno", 0666, NULL, &hello_proc_fops);
+    pr_info("Loading 'arduinouno' module!\n");
     return 0;
 }
 
+// Module cleanup
 static void __exit destruct(void) {
-    // Remove the proc entry and cleanup
     proc_remove(proc_entry);
-    printk(KERN_INFO "Removing 'arduinouno' module\n");
+    pr_info("Module 'arduinouno' has been removed\n");
 }
 
 module_init(construct);

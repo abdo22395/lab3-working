@@ -3,8 +3,10 @@
 #include <linux/uaccess.h>
 #include <linux/fs.h>
 #include <linux/proc_fs.h>
+#include <linux/kernel.h>
+#include <linux/random.h>
 
-#define PROCFS_BUFFER_SIZE  256  // Increased buffer size to handle strings like "hello man"
+#define PROCFS_BUFFER_SIZE  256  // Increased buffer size to handle more data
 static char proc_buffer[PROCFS_BUFFER_SIZE];
 static unsigned long buffer_size = 0;
 
@@ -44,13 +46,11 @@ static ssize_t read_proc_file(struct file *file, char __user *user_buffer,
         return -EFAULT;
     }
 
-    // Set the offset so that subsequent reads will return 0 (EOF)
     *offset = bytes_read;
 
     // Return the number of bytes successfully copied to user space
     return bytes_read;
 }
-
 
 // Function to handle write operations to the /proc file
 static ssize_t write_proc_file(struct file* file, const char __user* user_buffer,
@@ -68,52 +68,39 @@ static ssize_t write_proc_file(struct file* file, const char __user* user_buffer
         return -EFAULT;
     }
 
-    // Null terminate the string to ensure proper handling of text
-    proc_buffer[count] = '\0';
+    proc_buffer[count] = '\0';  // Null-terminate the string
+    buffer_size = count;        // Update the buffer size
 
-    // Update buffer_size with the actual number of bytes written
-    buffer_size = count;
-
-    // Print the received data to the kernel log for debugging purposes
     printk(KERN_INFO "Received data: %s\n", proc_buffer);
 
-    // Ensure that input is clean (trim any trailing spaces)
-    char *trimmed_input = proc_buffer;
-    while (*trimmed_input == ' ' || *trimmed_input == '\n') {
-        trimmed_input++;
-    }
+    // If the command is WRITE, write random data to /dev/ttyACM0
+    if (strncmp(proc_buffer, "WRITE", 5) == 0) {
+        // Generate random data to send to /dev/ttyACM0
+        char random_data[32];
+        get_random_bytes(random_data, sizeof(random_data));  // Generate random bytes
 
-    // Handle the WRITE command to simulate writing "hello man" to /dev/ttyACM0
-    if (strncmp(trimmed_input, "WRITE", 5) == 0) {
-        const char *write_string = "hello man";
+        // Open the device file /dev/ttyACM0 for writing
         struct file* device_file = filp_open("/dev/ttyACM0", O_RDWR, 0);
         if (IS_ERR(device_file)) {
             printk(KERN_ERR "Failed to open /dev/ttyACM0: %ld\n", PTR_ERR(device_file));
             return -EFAULT;
         }
 
-        // Write "hello man" to /dev/ttyACM0
-        ssize_t bytes_written = kernel_write(device_file, write_string, strlen(write_string), offset);
+        // Write the random data to /dev/ttyACM0
+        ssize_t bytes_written = kernel_write(device_file, random_data, sizeof(random_data), offset);
         filp_close(device_file, NULL);
 
-        printk(KERN_INFO "Written to /dev/ttyACM0: %s\n", write_string);
+        printk(KERN_INFO "Written random data to /dev/ttyACM0\n");
 
-        // Simulate reading back "hello man" into proc_buffer
-        snprintf(proc_buffer, PROCFS_BUFFER_SIZE, "%s", write_string);
-        buffer_size = strlen(proc_buffer);
-    } else if (strncmp(trimmed_input, "READ", 4) == 0) {
-        // Simulate reading a value
-        const char *read_string = "Simulated read from UART";
-        snprintf(proc_buffer, PROCFS_BUFFER_SIZE, "%s", read_string);
-        buffer_size = strlen(proc_buffer);
-        printk(KERN_INFO "Simulated UART read: %s\n", read_string);
+        // Simulate the data being read from /dev/ttyACM0
+        snprintf(proc_buffer, PROCFS_BUFFER_SIZE, "%s", random_data);
+        buffer_size = sizeof(random_data);
     } else {
-        printk(KERN_INFO "Invalid command, only WRITE and READ are supported.\n");
+        printk(KERN_INFO "Invalid command, only WRITE is supported.\n");
     }
 
     return count;
 }
-
 
 // Define the file operations for the /proc file
 static const struct proc_ops proc_file_operations = {
@@ -123,27 +110,24 @@ static const struct proc_ops proc_file_operations = {
 
 // Module initialization function
 static int __init module_init_function(void) {
-    // Create the /proc file entry for custom output
     proc_file_entry = proc_create("custom_output", 0666, NULL, &proc_file_operations);
     if (!proc_file_entry) {
         printk(KERN_ERR "Failed to create /proc/custom_output\n");
         return -ENOMEM;
     }
+
     pr_info("Module 'custom_output' is being loaded!\n");
     return 0;
 }
 
 // Module exit function
 static void __exit module_exit_function(void) {
-    // Remove the /proc file entry
     proc_remove(proc_file_entry);
     pr_info("Module 'custom_output' has been unloaded\n");
 }
 
-// Register the module initialization and exit functions
 module_init(module_init_function);
 module_exit(module_exit_function);
 
-// License and description for the module
 MODULE_LICENSE("GPL");
 MODULE_DESCRIPTION("Custom Kernel Module for Serial Communication");

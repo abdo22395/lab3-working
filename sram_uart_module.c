@@ -23,6 +23,7 @@ static ssize_t arduinouno_read(struct file *file, char __user *user_buf, size_t 
 
     if (*pos > 0) return 0; // EOF
 
+    // Open the UART file
     uart_file = filp_open(UART_PORT, O_RDWR | O_NOCTTY, 0);
     if (IS_ERR(uart_file)) {
         pr_err("Could not open UART file\n");
@@ -30,6 +31,8 @@ static ssize_t arduinouno_read(struct file *file, char __user *user_buf, size_t 
     }
 
     pr_info("Attempting to read from UART...");
+
+    // Wait for UART data to be ready, read from UART
     bytes_read = kernel_read(uart_file, kernel_buf, BUFFER_SIZE - 1, &uart_file->f_pos);
     if (bytes_read < 0) {
         pr_err("Failed to read from UART\n");
@@ -37,15 +40,16 @@ static ssize_t arduinouno_read(struct file *file, char __user *user_buf, size_t 
         return bytes_read;
     }
 
-    kernel_buf[bytes_read] = '\0'; // Null-terminate the buffer
+    kernel_buf[bytes_read] = '\0'; // Ensure null termination for safety
     pr_info("Data read from UART: %s\n", kernel_buf);
 
+    // Copy the data read from UART to the user buffer
     if (copy_to_user(user_buf, kernel_buf, bytes_read + 1)) {
         filp_close(uart_file, NULL);
         return -EFAULT;
     }
 
-    *pos += bytes_read;
+    *pos += bytes_read;  // Update the position
     filp_close(uart_file, NULL);
     return bytes_read;
 }
@@ -74,9 +78,13 @@ static ssize_t arduinouno_write(struct file *file, const char __user *user_buf, 
 
     if (bytes_written < 0) {
         pr_err("Failed to write to UART\n");
-    } else {
-        pr_info("Successfully wrote %zd bytes to UART\n", bytes_written);
+        return bytes_written;
     }
+
+    pr_info("Successfully wrote %zd bytes to UART\n", bytes_written);
+
+    // Add a small delay to allow the UART to process and respond
+    msleep(100); // Small delay after write to allow time for the Arduino to respond
 
     return bytes_written;
 }

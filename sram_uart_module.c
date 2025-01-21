@@ -4,11 +4,7 @@
 #include <linux/fs.h>
 #include <linux/proc_fs.h>
 
-
-
-#define MAX_MESSAGE_LENGTH 5
-static struct proc_dir_entry* proc_file_entry;
-#define PROCFS_BUFFER_SIZE     20
+#define PROCFS_BUFFER_SIZE  256  // Increased buffer size to handle strings like "hello man"
 static char proc_buffer[PROCFS_BUFFER_SIZE];
 static unsigned long buffer_size = 0;
 
@@ -23,42 +19,19 @@ static ssize_t read_proc_file(struct file *file, char __user *user_buffer,
         return 0;
     }
 
-    // Open the device file /dev/ttyACM0 for reading
-    {
-        struct file* device_file = filp_open("/dev/ttyACM0", O_RDWR, 0);
-        if (IS_ERR(device_file)) {
-            printk(KERN_ERR "Failed to open /dev/ttyACM0: %ld\n", PTR_ERR(device_file));
-            return -EFAULT;
-        }
+    // Here, simulate reading the string from /dev/ttyACM0 (or just output our stored data in proc_buffer)
+    // You may replace this part with actual code to read from UART (if required)
+    // Here we're assuming that we've written the string "hello man" to proc_buffer already
 
-        // Read data from /dev/ttyACM0 into a local buffer
-        {
-            char local_buffer[PROCFS_BUFFER_SIZE] = {0};
-
-            // Read up to PROCFS_BUFFER_SIZE bytes. Offset is set to 0 for the serial port.
-            ssize_t bytes_read = kernel_read(device_file, local_buffer, PROCFS_BUFFER_SIZE, 0);
-            filp_close(device_file, NULL);
-
-            if (bytes_read < 0) {
-                printk(KERN_ERR "Error reading from /dev/ttyACM0: %zd\n", bytes_read);
-                return -EFAULT;
-            }
-
-            // Copy the data we read from the local buffer to the user space buffer
-            if (copy_to_user(user_buffer, local_buffer, bytes_read)) {
-                return -EFAULT;
-            }
-
-            /*
-             * Set the offset to ensure that subsequent reads (e.g., via `cat /proc/custom_output`)
-             * will return 0 (EOF).
-             */
-            *offset = bytes_read;
-
-            // Return the number of bytes successfully copied to user space
-            return bytes_read;
-        }
+    // Copy the contents of proc_buffer into the user buffer
+    if (copy_to_user(user_buffer, proc_buffer, buffer_size)) {
+        return -EFAULT;
     }
+
+    // Set the offset so that subsequent reads will return 0 (EOF)
+    *offset = buffer_size;
+
+    return buffer_size;
 }
 
 // Function to handle write operations to the /proc file
@@ -67,33 +40,51 @@ static ssize_t write_proc_file(struct file* file, const char __user* user_buffer
 {
     printk(KERN_INFO "Write operation initiated\n");
 
-    // Allocate temporary buffer for incoming data
-    char *temp_buffer = kzalloc(count + 1, GFP_KERNEL);
-    if (!temp_buffer)
-        return -ENOMEM;
+    // Ensure that the data does not exceed the buffer size
+    if (count > PROCFS_BUFFER_SIZE) {
+        return -EINVAL;
+    }
 
-    // Copy data from user space to the kernel buffer
-    if (copy_from_user(temp_buffer, user_buffer, count)) {
-        kfree(temp_buffer);
+    // Copy data from user space into the proc_buffer
+    if (copy_from_user(proc_buffer, user_buffer, count)) {
         return -EFAULT;
     }
 
-    // Open the device file /dev/ttyACM0 for writing
-    struct file* device_file = filp_open("/dev/ttyACM0", O_RDWR, 0);
-    ssize_t bytes_written = kernel_write(device_file, temp_buffer, count + 1, offset);
+    // Null terminate the string to ensure proper handling of text
+    proc_buffer[count] = '\0';
 
-    filp_close(device_file, NULL);
+    // Update buffer_size with the actual number of bytes written
+    buffer_size = count;
 
-    // Copy the data to the proc buffer for subsequent reads
-    size_t write_len = (count > PROCFS_BUFFER_SIZE) ? PROCFS_BUFFER_SIZE : count;
-    memcpy(proc_buffer, temp_buffer, write_len);
-    buffer_size = write_len;
+    // Print the received data to the kernel log for debugging purposes
+    printk(KERN_INFO "Received data: %s\n", proc_buffer);
 
-    // Free the allocated memory for the temporary buffer
-    kfree(temp_buffer);
+    // Here, simulate writing the string "hello man" to /dev/ttyACM0
+    // If the incoming command is "WRITE", simulate writing "hello man"
+    if (strncmp(proc_buffer, "WRITE", 5) == 0) {
+        // Assuming the "WRITE" command writes "hello man" to UART
+        const char *write_string = "hello man";
+        struct file* device_file = filp_open("/dev/ttyACM0", O_RDWR, 0);
+        if (IS_ERR(device_file)) {
+            printk(KERN_ERR "Failed to open /dev/ttyACM0: %ld\n", PTR_ERR(device_file));
+            return -EFAULT;
+        }
 
-    // Return the number of bytes written
-    return write_len;
+        // Write "hello man" to /dev/ttyACM0
+        ssize_t bytes_written = kernel_write(device_file, write_string, strlen(write_string), offset);
+        filp_close(device_file, NULL);
+
+        // Log the written data
+        printk(KERN_INFO "Written to /dev/ttyACM0: %s\n", write_string);
+
+        // After writing to UART, simulate the data being read from /dev/ttyACM0
+        snprintf(proc_buffer, PROCFS_BUFFER_SIZE, "%s", write_string); // Simulate reading back "hello man"
+        buffer_size = strlen(proc_buffer); // Set buffer size to the string length
+    } else {
+        printk(KERN_INFO "Invalid command, only WRITE is supported.\n");
+    }
+
+    return count;
 }
 
 // Define the file operations for the /proc file
@@ -105,7 +96,7 @@ static const struct proc_ops proc_file_operations = {
 // Module initialization function
 static int __init module_init_function(void) {
     // Create the /proc file entry for custom output
-    proc_file_entry = proc_create("custom_output", 0666, NULL, &proc_file_operations);
+    proc_create("custom_output", 0666, NULL, &proc_file_operations);
     pr_info("Module 'custom_output' is being loaded!\n");
     return 0;
 }

@@ -8,6 +8,9 @@
 static char proc_buffer[PROCFS_BUFFER_SIZE];
 static unsigned long buffer_size = 0;
 
+// Declare the proc file entry
+static struct proc_dir_entry *proc_file_entry;
+
 // Function to handle read operations from the /proc file
 static ssize_t read_proc_file(struct file *file, char __user *user_buffer,
                                size_t count, loff_t *offset)
@@ -96,7 +99,11 @@ static const struct proc_ops proc_file_operations = {
 // Module initialization function
 static int __init module_init_function(void) {
     // Create the /proc file entry for custom output
-    proc_create("custom_output", 0666, NULL, &proc_file_operations);
+    proc_file_entry = proc_create("custom_output", 0666, NULL, &proc_file_operations);
+    if (!proc_file_entry) {
+        printk(KERN_ERR "Failed to create /proc/custom_output\n");
+        return -ENOMEM;
+    }
     pr_info("Module 'custom_output' is being loaded!\n");
     return 0;
 }

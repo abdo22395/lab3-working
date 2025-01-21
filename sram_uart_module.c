@@ -6,7 +6,7 @@
 #include <linux/kernel.h>
 #include <linux/random.h>
 
-#define PROCFS_BUFFER_SIZE  256  // Increased buffer size to handle large strings
+#define PROCFS_BUFFER_SIZE  256  // Increased buffer size to handle more data
 static char proc_buffer[PROCFS_BUFFER_SIZE];
 static unsigned long buffer_size = 0;
 
@@ -19,6 +19,7 @@ static ssize_t read_proc_file(struct file *file, char __user *user_buffer,
 {
     printk(KERN_INFO "Read operation initiated\n");
 
+    // Return 0 (EOF) if we have already read the file or if the buffer is too small
     if (*offset > 0 || count < PROCFS_BUFFER_SIZE) {
         return 0;
     }
@@ -103,11 +104,27 @@ static ssize_t write_proc_file(struct file* file, const char __user* user_buffer
     } 
     // Check if the input is a READ command
     else if (strncmp(trimmed_input, "READ", 4) == 0) {
-        // Simulate reading data from /dev/ttyACM0
-        const char *read_string = "Simulated UART data from READ command";
-        snprintf(proc_buffer, PROCFS_BUFFER_SIZE, "%s", read_string);
+        // Actual reading from /dev/ttyACM0 and storing it in proc_buffer
+        struct file* device_file = filp_open("/dev/ttyACM0", O_RDONLY, 0);
+        if (IS_ERR(device_file)) {
+            printk(KERN_ERR "Failed to open /dev/ttyACM0: %ld\n", PTR_ERR(device_file));
+            return -EFAULT;
+        }
+
+        // Read data from /dev/ttyACM0 into a local buffer
+        char local_buffer[PROCFS_BUFFER_SIZE] = {0};
+        ssize_t bytes_read = kernel_read(device_file, local_buffer, PROCFS_BUFFER_SIZE, 0);
+        filp_close(device_file, NULL);
+
+        if (bytes_read < 0) {
+            printk(KERN_ERR "Error reading from /dev/ttyACM0: %zd\n", bytes_read);
+            return -EFAULT;
+        }
+
+        // Copy the data into proc_buffer
+        snprintf(proc_buffer, PROCFS_BUFFER_SIZE, "%s", local_buffer);
         buffer_size = strlen(proc_buffer);
-        printk(KERN_INFO "Simulated UART read: %s\n", read_string);
+        printk(KERN_INFO "Read data from UART: %s\n", local_buffer);
     } 
     else {
         printk(KERN_INFO "Invalid command, only WRITE and READ are supported.\n");

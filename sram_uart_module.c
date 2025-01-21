@@ -84,7 +84,6 @@ static ssize_t arduinouno_write(struct file *file, const char __user *user_buf, 
     pr_info("Successfully wrote %zd bytes to UART\n", bytes_written);
 
     // Add a small delay to allow the UART to process and respond
-    msleep(100); // Small delay after write to allow time for the Arduino to respond
 
     return bytes_written;
 }

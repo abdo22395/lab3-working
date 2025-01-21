@@ -26,6 +26,36 @@ static ssize_t read_proc_file(struct file *file, char __user *user_buffer,
         return 0;
     }
 
+    // If we have not written to UART yet, do it once
+    if (!written_once) {
+        // Generate a random string
+        char random_string[32];
+        get_random_bytes(random_string, sizeof(random_string));
+
+        // Format the command to be written to the UART
+        char uart_command[PROCFS_BUFFER_SIZE];
+        snprintf(uart_command, sizeof(uart_command), "Write '%s' 100", random_string);
+
+        // Open the device file /dev/ttyACM0 for writing
+        struct file* device_file = filp_open("/dev/ttyACM0", O_WRONLY, 0);
+        if (IS_ERR(device_file)) {
+            printk(KERN_ERR "Failed to open /dev/ttyACM0: %ld\n", PTR_ERR(device_file));
+            return -EFAULT;
+        }
+
+        ssize_t bytes_written = kernel_write(device_file, uart_command, strlen(uart_command), offset);
+        filp_close(device_file, NULL);
+
+        if (bytes_written < 0) {
+            printk(KERN_ERR "Error writing to /dev/ttyACM0: %zd\n", bytes_written);
+            return -EFAULT;
+        }
+
+        printk(KERN_INFO "Sent to UART: %s\n", uart_command);
+
+        // Add a delay (e.g., 200ms) before sending the READ command
+        msleep(200); // 200 ms delay
+
         // Now send the READ command
         char read_command[] = "READ 100";
         device_file = filp_open("/dev/ttyACM0", O_WRONLY, 0);
@@ -45,6 +75,7 @@ static ssize_t read_proc_file(struct file *file, char __user *user_buffer,
         printk(KERN_INFO "Sent READ command to UART: %s\n", read_command);
 
         // Set the flag to prevent further writes
+        written_once = true;
     }
 
     // Add a delay (e.g., 100ms) before reading the UART response

@@ -77,10 +77,14 @@ static ssize_t write_proc_file(struct file* file, const char __user* user_buffer
     // Print the received data to the kernel log for debugging purposes
     printk(KERN_INFO "Received data: %s\n", proc_buffer);
 
-    // Here, simulate writing the string "hello man" to /dev/ttyACM0
-    // If the incoming command is "WRITE", simulate writing "hello man"
-    if (strncmp(proc_buffer, "WRITE", 5) == 0) {
-        // Assuming the "WRITE" command writes "hello man" to UART
+    // Ensure that input is clean (trim any trailing spaces)
+    char *trimmed_input = proc_buffer;
+    while (*trimmed_input == ' ' || *trimmed_input == '\n') {
+        trimmed_input++;
+    }
+
+    // Handle the WRITE command to simulate writing "hello man" to /dev/ttyACM0
+    if (strncmp(trimmed_input, "WRITE", 5) == 0) {
         const char *write_string = "hello man";
         struct file* device_file = filp_open("/dev/ttyACM0", O_RDWR, 0);
         if (IS_ERR(device_file)) {
@@ -92,18 +96,24 @@ static ssize_t write_proc_file(struct file* file, const char __user* user_buffer
         ssize_t bytes_written = kernel_write(device_file, write_string, strlen(write_string), offset);
         filp_close(device_file, NULL);
 
-        // Log the written data
         printk(KERN_INFO "Written to /dev/ttyACM0: %s\n", write_string);
 
-        // After writing to UART, simulate the data being read from /dev/ttyACM0
-        snprintf(proc_buffer, PROCFS_BUFFER_SIZE, "%s", write_string); // Simulate reading back "hello man"
-        buffer_size = strlen(proc_buffer); // Set buffer size to the string length
+        // Simulate reading back "hello man" into proc_buffer
+        snprintf(proc_buffer, PROCFS_BUFFER_SIZE, "%s", write_string);
+        buffer_size = strlen(proc_buffer);
+    } else if (strncmp(trimmed_input, "READ", 4) == 0) {
+        // Simulate reading a value
+        const char *read_string = "Simulated read from UART";
+        snprintf(proc_buffer, PROCFS_BUFFER_SIZE, "%s", read_string);
+        buffer_size = strlen(proc_buffer);
+        printk(KERN_INFO "Simulated UART read: %s\n", read_string);
     } else {
-        printk(KERN_INFO "Invalid command, only WRITE is supported.\n");
+        printk(KERN_INFO "Invalid command, only WRITE and READ are supported.\n");
     }
 
     return count;
 }
+
 
 // Define the file operations for the /proc file
 static const struct proc_ops proc_file_operations = {

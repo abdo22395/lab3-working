@@ -4,8 +4,9 @@
 #include <linux/fs.h>
 #include <linux/proc_fs.h>
 #include <linux/kernel.h>
+#include <linux/random.h>
 
-#define PROCFS_BUFFER_SIZE  256  // Increased buffer size to handle large strings
+#define PROCFS_BUFFER_SIZE  256  // Increased buffer size to handle more data
 static char proc_buffer[PROCFS_BUFFER_SIZE];
 static unsigned long buffer_size = 0;
 
@@ -57,20 +58,77 @@ static ssize_t write_proc_file(struct file* file, const char __user* user_buffer
 {
     printk(KERN_INFO "Write operation initiated\n");
 
-    // Write the string "HELLO MAN" directly to NVSRAM at address 100
-    const char *write_string = "HELLO MAN";
-    int address = 100;
-
-    // Write each character of "HELLO MAN" to NVSRAM at the specified address
-    for (int i = 0; i < strlen(write_string); i++) {
-        nvSRAM.write(address + i, write_string[i]); // Write each byte to NVSRAM
+    if (count > PROCFS_BUFFER_SIZE) {
+        return -EINVAL;
     }
 
-    printk(KERN_INFO "Written data to NVSRAM: %s\n", write_string);
+    // Copy data from user space into the proc_buffer
+    if (copy_from_user(proc_buffer, user_buffer, count)) {
+        return -EFAULT;
+    }
 
-    // Simulate reading the data back into proc_buffer
-    snprintf(proc_buffer, PROCFS_BUFFER_SIZE, "%s", write_string);
-    buffer_size = strlen(proc_buffer);
+    proc_buffer[count] = '\0';  // Null-terminate the string
+    buffer_size = count;        // Update the buffer size
+
+    printk(KERN_INFO "Received data: %s\n", proc_buffer);
+
+    // Trim leading spaces or newline characters from the user input
+    char *trimmed_input = proc_buffer;
+    while (*trimmed_input == ' ' || *trimmed_input == '\n') {
+        trimmed_input++;
+    }
+
+    // Check if the input is a WRITE command
+    if (strncmp(trimmed_input, "WRITE", 5) == 0) {
+        const char *write_string = "Sending random data to UART";
+
+        // Generate random data
+        char random_data[32];
+        get_random_bytes(random_data, sizeof(random_data));
+
+        // Open /dev/ttyACM0 for writing
+        struct file* device_file = filp_open("/dev/ttyACM0", O_RDWR, 0);
+        if (IS_ERR(device_file)) {
+            printk(KERN_ERR "Failed to open /dev/ttyACM0: %ld\n", PTR_ERR(device_file));
+            return -EFAULT;
+        }
+
+        ssize_t bytes_written = kernel_write(device_file, random_data, sizeof(random_data), offset);
+        filp_close(device_file, NULL);
+
+        printk(KERN_INFO "Written random data to /dev/ttyACM0\n");
+
+        // Simulate reading the data back into proc_buffer
+        snprintf(proc_buffer, PROCFS_BUFFER_SIZE, "%s", random_data);
+        buffer_size = strlen(proc_buffer);
+    } 
+    // Check if the input is a READ command
+    else if (strncmp(trimmed_input, "READ", 4) == 0) {
+        // Actual reading from /dev/ttyACM0 and storing it in proc_buffer
+        struct file* device_file = filp_open("/dev/ttyACM0", O_RDONLY, 0);
+        if (IS_ERR(device_file)) {
+            printk(KERN_ERR "Failed to open /dev/ttyACM0: %ld\n", PTR_ERR(device_file));
+            return -EFAULT;
+        }
+
+        // Read data from /dev/ttyACM0 into a local buffer
+        char local_buffer[PROCFS_BUFFER_SIZE] = {0};
+        ssize_t bytes_read = kernel_read(device_file, local_buffer, PROCFS_BUFFER_SIZE, 0);
+        filp_close(device_file, NULL);
+
+        if (bytes_read < 0) {
+            printk(KERN_ERR "Error reading from /dev/ttyACM0: %zd\n", bytes_read);
+            return -EFAULT;
+        }
+
+        // Copy the data into proc_buffer
+        snprintf(proc_buffer, PROCFS_BUFFER_SIZE, "%s", local_buffer);
+        buffer_size = strlen(proc_buffer);
+        printk(KERN_INFO "Read data from UART: %s\n", local_buffer);
+    } 
+    else {
+        printk(KERN_INFO "Invalid command, only WRITE and READ are supported.\n");
+    }
 
     return count;
 }
@@ -88,9 +146,6 @@ static int __init module_init_function(void) {
         printk(KERN_ERR "Failed to create /proc/custom_output\n");
         return -ENOMEM;
     }
-
-    // Write "HELLO MAN" to NVSRAM at address 100 as soon as the module is loaded
-    write_proc_file(NULL, NULL, 0, NULL);
 
     pr_info("Module 'custom_output' is being loaded!\n");
     return 0;

@@ -24,35 +24,74 @@ static ssize_t read_proc_file(struct file *file, char __user *user_buffer,
         return 0;
     }
 
-    // Open the device file /dev/ttyACM0 for reading
-    struct file* device_file = filp_open("/dev/ttyACM0", O_RDONLY, 0);
+    // Generate a random string
+    char random_string[32];
+    get_random_bytes(random_string, sizeof(random_string));
+
+    // Format the command to be written to the UART
+    char uart_command[PROCFS_BUFFER_SIZE];
+    snprintf(uart_command, sizeof(uart_command), "Write '%s' 0", random_string);
+
+    // Open the device file /dev/ttyACM0 for writing
+    struct file* device_file = filp_open("/dev/ttyACM0", O_WRONLY, 0);
     if (IS_ERR(device_file)) {
         printk(KERN_ERR "Failed to open /dev/ttyACM0: %ld\n", PTR_ERR(device_file));
         return -EFAULT;
     }
 
-    // Read data from /dev/ttyACM0 into a local buffer
-    char local_buffer[PROCFS_BUFFER_SIZE] = {0};
-    ssize_t bytes_read = kernel_read(device_file, local_buffer, PROCFS_BUFFER_SIZE, 0);
+    ssize_t bytes_written = kernel_write(device_file, uart_command, strlen(uart_command), offset);
     filp_close(device_file, NULL);
+
+    if (bytes_written < 0) {
+        printk(KERN_ERR "Error writing to /dev/ttyACM0: %zd\n", bytes_written);
+        return -EFAULT;
+    }
+
+    printk(KERN_INFO "Sent to UART: %s\n", uart_command);
+
+    // Now send the READ command
+    char read_command[] = "READ 0";
+    device_file = filp_open("/dev/ttyACM0", O_WRONLY, 0);
+    if (IS_ERR(device_file)) {
+        printk(KERN_ERR "Failed to open /dev/ttyACM0 for READ command: %ld\n", PTR_ERR(device_file));
+        return -EFAULT;
+    }
+
+    bytes_written = kernel_write(device_file, read_command, strlen(read_command), offset);
+    filp_close(device_file, NULL);
+
+    if (bytes_written < 0) {
+        printk(KERN_ERR "Error writing READ command to /dev/ttyACM0: %zd\n", bytes_written);
+        return -EFAULT;
+    }
+
+    printk(KERN_INFO "Sent READ command to UART: %s\n", read_command);
+
+    // Now listen on the UART and capture the response
+    struct file* uart_device_file = filp_open("/dev/ttyACM0", O_RDONLY, 0);
+    if (IS_ERR(uart_device_file)) {
+        printk(KERN_ERR "Failed to open /dev/ttyACM0 for reading: %ld\n", PTR_ERR(uart_device_file));
+        return -EFAULT;
+    }
+
+    char uart_response[PROCFS_BUFFER_SIZE] = {0};
+    ssize_t bytes_read = kernel_read(uart_device_file, uart_response, sizeof(uart_response), 0);
+    filp_close(uart_device_file, NULL);
 
     if (bytes_read < 0) {
         printk(KERN_ERR "Error reading from /dev/ttyACM0: %zd\n", bytes_read);
         return -EFAULT;
     }
 
-    // Copy the data we read from the local buffer to the user space buffer
-    if (copy_to_user(user_buffer, local_buffer, bytes_read)) {
-        return -EFAULT;
-    }
+    // Copy the UART response to the proc buffer to send to user space
+    snprintf(proc_buffer, PROCFS_BUFFER_SIZE, "Received from UART: %s", uart_response);
+    buffer_size = strlen(proc_buffer);
 
-    *offset = bytes_read;
-
-    // Return the number of bytes successfully copied to user space
-    return bytes_read;
+    // Return the response to user space
+    return buffer_size;
 }
 
-// Function to handle write operations to the /proc file
+// Function to handle write operations to the /proc file (not needed for this use case)
 static ssize_t write_proc_file(struct file* file, const char __user* user_buffer,
                                 size_t count, loff_t* offset)
 {
@@ -62,7 +101,7 @@ static ssize_t write_proc_file(struct file* file, const char __user* user_buffer
         return -EINVAL;
     }
 
-    // Copy data from user space into the proc_buffer
+    // Copy data from user space into the proc_buffer (just for logging)
     if (copy_from_user(proc_buffer, user_buffer, count)) {
         return -EFAULT;
     }
@@ -72,65 +111,7 @@ static ssize_t write_proc_file(struct file* file, const char __user* user_buffer
 
     printk(KERN_INFO "Received data: %s\n", proc_buffer);
 
-    // Trim leading spaces or newline characters from the user input
-    char *trimmed_input = proc_buffer;
-    while (*trimmed_input == ' ' || *trimmed_input == '\n') {
-        trimmed_input++;
-    }
-
-    // Check if the input is a WRITE command
-    if (strncmp(trimmed_input, "WRITE", 5) == 0) {
-        const char *write_string = "Sending random data to UART";
-
-        // Generate random data
-        char random_data[32];
-        get_random_bytes(random_data, sizeof(random_data));
-
-        // Open /dev/ttyACM0 for writing
-        struct file* device_file = filp_open("/dev/ttyACM0", O_RDWR, 0);
-        if (IS_ERR(device_file)) {
-            printk(KERN_ERR "Failed to open /dev/ttyACM0: %ld\n", PTR_ERR(device_file));
-            return -EFAULT;
-        }
-
-        ssize_t bytes_written = kernel_write(device_file, random_data, sizeof(random_data), offset);
-        filp_close(device_file, NULL);
-
-        printk(KERN_INFO "Written random data to /dev/ttyACM0\n");
-
-        // Simulate reading the data back into proc_buffer
-        snprintf(proc_buffer, PROCFS_BUFFER_SIZE, "%s", random_data);
-        buffer_size = strlen(proc_buffer);
-    } 
-    // Check if the input is a READ command
-    else if (strncmp(trimmed_input, "READ", 4) == 0) {
-        // Actual reading from /dev/ttyACM0 and storing it in proc_buffer
-        struct file* device_file = filp_open("/dev/ttyACM0", O_RDONLY, 0);
-        if (IS_ERR(device_file)) {
-            printk(KERN_ERR "Failed to open /dev/ttyACM0: %ld\n", PTR_ERR(device_file));
-            return -EFAULT;
-        }
-
-        // Read data from /dev/ttyACM0 into a local buffer
-        char local_buffer[PROCFS_BUFFER_SIZE] = {0};
-        ssize_t bytes_read = kernel_read(device_file, local_buffer, PROCFS_BUFFER_SIZE, 0);
-        filp_close(device_file, NULL);
-
-        if (bytes_read < 0) {
-            printk(KERN_ERR "Error reading from /dev/ttyACM0: %zd\n", bytes_read);
-            return -EFAULT;
-        }
-
-        // Copy the data into proc_buffer
-        snprintf(proc_buffer, PROCFS_BUFFER_SIZE, "%s", local_buffer);
-        buffer_size = strlen(proc_buffer);
-        printk(KERN_INFO "Read data from UART: %s\n", local_buffer);
-    } 
-    else {
-        printk(KERN_INFO "Invalid command, only WRITE and READ are supported.\n");
-    }
-
-    return count;
+    return count;  // No further action on write for this use case
 }
 
 // Define the file operations for the /proc file
@@ -161,4 +142,4 @@ module_init(module_init_function);
 module_exit(module_exit_function);
 
 MODULE_LICENSE("GPL");
-MODULE_DESCRIPTION("Custom Kernel Module for Serial Communication");
+MODULE_DESCRIPTION("Custom Kernel Module for UART Communication");

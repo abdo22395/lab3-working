@@ -1,162 +1,117 @@
+/*
+ * Kernel module for Raspberry Pi to communicate with an Arduino that handles SRAM.
+ */
 #include <linux/init.h>
 #include <linux/module.h>
-#include <linux/uaccess.h>
-#include <linux/fs.h>
 #include <linux/proc_fs.h>
-#include <linux/kernel.h>
-#include <linux/random.h>
-#include <linux/delay.h>  // For msleep()
+#include <linux/uaccess.h>
+#include <linux/slab.h>
+#include <linux/serial.h>
+#include <linux/serial_core.h>
 
-#define PROCFS_BUFFER_SIZE  256  // Increased buffer size to handle more data
-static char proc_buffer[PROCFS_BUFFER_SIZE];
-static unsigned long buffer_size = 0;
-static bool written_once = false;  // Flag to track if data has been written to UART
+#define PROC_NAME "arduinouno"
+#define UART_PORT "/dev/ttyACM0"
+#define BUFFER_SIZE 256
 
-// Declare the proc file entry
-static struct proc_dir_entry *proc_file_entry;
+static char *data_buffer;
+static struct file *uart_file;
 
-// Function to handle read operations from the /proc file
-static ssize_t read_proc_file(struct file *file, char __user *user_buffer,
-                               size_t count, loff_t *offset)
+static ssize_t arduinouno_read(struct file *file, char __user *user_buf, size_t count, loff_t *pos)
 {
-    printk(KERN_INFO "Read operation initiated\n");
+    char kernel_buf[BUFFER_SIZE];
+    ssize_t bytes_read;
 
-    // Return 0 (EOF) if we have already read the file or if the buffer is too small
-    if (*offset > 0 || count < PROCFS_BUFFER_SIZE) {
-        return 0;
+    if (*pos > 0) return 0; // EOF
+
+    uart_file = filp_open(UART_PORT, O_RDWR | O_NOCTTY, 0);
+    if (IS_ERR(uart_file)) {
+        pr_err("Could not open UART file\n");
+        return PTR_ERR(uart_file);
     }
 
-    // If we have not written to UART yet, do it once
-    if (!written_once) {
-        // Generate a random string
-        char random_string[32];
-        get_random_bytes(random_string, sizeof(random_string));
-
-        // Format the command to be written to the UART
-        char uart_command[PROCFS_BUFFER_SIZE];
-        snprintf(uart_command, sizeof(uart_command), "Write '%s' 100", random_string);
-
-        // Open the device file /dev/ttyACM0 for writing
-        struct file* device_file = filp_open("/dev/ttyACM0", O_WRONLY, 0);
-        if (IS_ERR(device_file)) {
-            printk(KERN_ERR "Failed to open /dev/ttyACM0: %ld\n", PTR_ERR(device_file));
-            return -EFAULT;
-        }
-
-        ssize_t bytes_written = kernel_write(device_file, uart_command, strlen(uart_command), offset);
-        filp_close(device_file, NULL);
-
-        if (bytes_written < 0) {
-            printk(KERN_ERR "Error writing to /dev/ttyACM0: %zd\n", bytes_written);
-            return -EFAULT;
-        }
-
-        printk(KERN_INFO "Sent to UART: %s\n", uart_command);
-
-        // Add a delay (e.g., 200ms) before sending the READ command
-        msleep(200); // 200 ms delay
-
-        // Now send the READ command
-        char read_command[] = "READ 100";
-        device_file = filp_open("/dev/ttyACM0", O_WRONLY, 0);
-        if (IS_ERR(device_file)) {
-            printk(KERN_ERR "Failed to open /dev/ttyACM0 for READ command: %ld\n", PTR_ERR(device_file));
-            return -EFAULT;
-        }
-
-        bytes_written = kernel_write(device_file, read_command, strlen(read_command), offset);
-        filp_close(device_file, NULL);
-
-        if (bytes_written < 0) {
-            printk(KERN_ERR "Error writing READ command to /dev/ttyACM0: %zd\n", bytes_written);
-            return -EFAULT;
-        }
-
-        printk(KERN_INFO "Sent READ command to UART: %s\n", read_command);
-
-        // Set the flag to prevent further writes
-        written_once = false;
-    }
-
-    // Add a delay (e.g., 100ms) before reading the UART response
-    msleep(100); // 100 ms delay
-
-    // Now listen on the UART and capture the response
-    struct file* uart_device_file = filp_open("/dev/ttyACM0", O_RDONLY, 0);
-    if (IS_ERR(uart_device_file)) {
-        printk(KERN_ERR "Failed to open /dev/ttyACM0 for reading: %ld\n", PTR_ERR(uart_device_file));
-        return -EFAULT;
-    }
-
-    char uart_response[PROCFS_BUFFER_SIZE] = {0};
-    ssize_t bytes_read = kernel_read(uart_device_file, uart_response, sizeof(uart_response), 0);
-    filp_close(uart_device_file, NULL);
-
+    pr_info("Attempting to read from UART...");
+    bytes_read = kernel_read(uart_file, kernel_buf, BUFFER_SIZE - 1, &uart_file->f_pos);
     if (bytes_read < 0) {
-        printk(KERN_ERR "Error reading from /dev/ttyACM0: %zd\n", bytes_read);
+        pr_err("Failed to read from UART\n");
+        filp_close(uart_file, NULL);
+        return bytes_read;
+    }
+
+    kernel_buf[bytes_read] = '\0'; // Null-terminate the buffer
+    pr_info("Data read from UART: %s\n", kernel_buf);
+
+    if (copy_to_user(user_buf, kernel_buf, bytes_read + 1)) {
+        filp_close(uart_file, NULL);
         return -EFAULT;
     }
 
-    // Add a delay after reading the response (e.g., 200ms)
-    msleep(200); // 200 ms delay
-
-    // Copy the UART response to the proc buffer to send to user space
-    snprintf(proc_buffer, PROCFS_BUFFER_SIZE, "Received from UART: %s", uart_response);
-    buffer_size = strlen(proc_buffer);
-
-    // Return the response to user space
-    return buffer_size;
+    *pos += bytes_read;
+    filp_close(uart_file, NULL);
+    return bytes_read;
 }
 
-// Function to handle write operations to the /proc file (not needed for this use case)
-static ssize_t write_proc_file(struct file* file, const char __user* user_buffer,
-                                size_t count, loff_t* offset)
+static ssize_t arduinouno_write(struct file *file, const char __user *user_buf, size_t count, loff_t *pos)
 {
-    printk(KERN_INFO "Write operation initiated\n");
+    ssize_t bytes_written;
 
-    if (count > PROCFS_BUFFER_SIZE) {
+    if (count > BUFFER_SIZE - 1)
         return -EINVAL;
-    }
 
-    // Copy data from user space into the proc_buffer (just for logging)
-    if (copy_from_user(proc_buffer, user_buffer, count)) {
+    if (copy_from_user(data_buffer, user_buf, count))
         return -EFAULT;
+
+    data_buffer[count] = '\0';
+
+    uart_file = filp_open(UART_PORT, O_RDWR | O_NOCTTY, 0);
+    if (IS_ERR(uart_file)) {
+        pr_err("Could not open UART file\n");
+        return PTR_ERR(uart_file);
     }
 
-    proc_buffer[count] = '\0';  // Null-terminate the string
-    buffer_size = count;        // Update the buffer size
+    pr_info("Attempting to write to UART: %s\n", data_buffer);
+    bytes_written = kernel_write(uart_file, data_buffer, count, &uart_file->f_pos);
+    filp_close(uart_file, NULL);
 
-    printk(KERN_INFO "Received data: %s\n", proc_buffer);
+    if (bytes_written < 0) {
+        pr_err("Failed to write to UART\n");
+    } else {
+        pr_info("Successfully wrote %zd bytes to UART\n", bytes_written);
+    }
 
-    return count;  // No further action on write for this use case
+    return bytes_written;
 }
 
-// Define the file operations for the /proc file
-static const struct proc_ops proc_file_operations = {
-  .proc_read = read_proc_file,
-  .proc_write = write_proc_file,
+static struct proc_ops proc_ops = {
+    .proc_read = arduinouno_read,
+    .proc_write = arduinouno_write,
 };
 
-// Module initialization function
-static int __init module_init_function(void) {
-    proc_file_entry = proc_create("custom_output", 0666, NULL, &proc_file_operations);
-    if (!proc_file_entry) {
-        printk(KERN_ERR "Failed to create /proc/custom_output\n");
+static int __init arduinouno_init(void)
+{
+    data_buffer = kmalloc(BUFFER_SIZE, GFP_KERNEL);
+    if (!data_buffer)
+        return -ENOMEM;
+
+    if (!proc_create(PROC_NAME, 0666, NULL, &proc_ops)) {
+        kfree(data_buffer);
+        pr_err("Failed to create /proc entry\n");
         return -ENOMEM;
     }
 
-    pr_info("Module 'custom_output' is being loaded!\n");
+    pr_info("ArduinoUno module loaded\n");
     return 0;
 }
 
-// Module exit function
-static void __exit module_exit_function(void) {
-    proc_remove(proc_file_entry);
-    pr_info("Module 'custom_output' has been unloaded\n");
+static void __exit arduinouno_exit(void)
+{
+    remove_proc_entry(PROC_NAME, NULL);
+    kfree(data_buffer);
+    pr_info("ArduinoUno module unloaded\n");
 }
 
-module_init(module_init_function);
-module_exit(module_exit_function);
+module_init(arduinouno_init);
+module_exit(arduinouno_exit);
 
 MODULE_LICENSE("GPL");
-MODULE_DESCRIPTION("Custom Kernel Module for UART Communication with Delays");
+MODULE_AUTHOR("Your Name");
+MODULE_DESCRIPTION("Kernel module for Raspberry Pi communication with Arduino");

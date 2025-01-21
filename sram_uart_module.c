@@ -34,7 +34,7 @@ static ssize_t read_proc_file(struct file *file, char __user *user_buffer,
 
         // Format the command to be written to the UART
         char uart_command[PROCFS_BUFFER_SIZE];
-        snprintf(uart_command, sizeof(uart_command), "Write '%s' 0", random_string);
+        snprintf(uart_command, sizeof(uart_command), "Write '%s' 100", random_string);
 
         // Open the device file /dev/ttyACM0 for writing
         struct file* device_file = filp_open("/dev/ttyACM0", O_WRONLY, 0);
@@ -57,7 +57,7 @@ static ssize_t read_proc_file(struct file *file, char __user *user_buffer,
         msleep(200); // 200 ms delay
 
         // Now send the READ command
-        char read_command[] = "READ 0";
+        char read_command[] = "READ 100";
         device_file = filp_open("/dev/ttyACM0", O_WRONLY, 0);
         if (IS_ERR(device_file)) {
             printk(KERN_ERR "Failed to open /dev/ttyACM0 for READ command: %ld\n", PTR_ERR(device_file));

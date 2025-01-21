@@ -22,20 +22,35 @@ static ssize_t read_proc_file(struct file *file, char __user *user_buffer,
         return 0;
     }
 
-    // Here, simulate reading the string from /dev/ttyACM0 (or just output our stored data in proc_buffer)
-    // You may replace this part with actual code to read from UART (if required)
-    // Here we're assuming that we've written the string "hello man" to proc_buffer already
+    // Open the device file /dev/ttyACM0 for reading
+    struct file* device_file = filp_open("/dev/ttyACM0", O_RDONLY, 0);
+    if (IS_ERR(device_file)) {
+        printk(KERN_ERR "Failed to open /dev/ttyACM0: %ld\n", PTR_ERR(device_file));
+        return -EFAULT;
+    }
 
-    // Copy the contents of proc_buffer into the user buffer
-    if (copy_to_user(user_buffer, proc_buffer, buffer_size)) {
+    // Read data from /dev/ttyACM0 into a local buffer
+    char local_buffer[PROCFS_BUFFER_SIZE] = {0};
+    ssize_t bytes_read = kernel_read(device_file, local_buffer, PROCFS_BUFFER_SIZE, 0);
+    filp_close(device_file, NULL);
+
+    if (bytes_read < 0) {
+        printk(KERN_ERR "Error reading from /dev/ttyACM0: %zd\n", bytes_read);
+        return -EFAULT;
+    }
+
+    // Copy the data we read from the local buffer to the user space buffer
+    if (copy_to_user(user_buffer, local_buffer, bytes_read)) {
         return -EFAULT;
     }
 
     // Set the offset so that subsequent reads will return 0 (EOF)
-    *offset = buffer_size;
+    *offset = bytes_read;
 
-    return buffer_size;
+    // Return the number of bytes successfully copied to user space
+    return bytes_read;
 }
+
 
 // Function to handle write operations to the /proc file
 static ssize_t write_proc_file(struct file* file, const char __user* user_buffer,

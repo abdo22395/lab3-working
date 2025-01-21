@@ -4,7 +4,7 @@
 #include <unistd.h>
 #include <time.h>
 
-#define PROC_PATH "/proc/arduinouno"
+#define PROC_PATH "/proc/custom_output"
 
 // Function to generate a random string of a given length
 void generate_random_string(char *str, size_t len) {

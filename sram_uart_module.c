@@ -36,45 +36,66 @@ static ssize_t read_from_uart(struct file* uart_file, char *buffer, size_t len) 
     return bytes_read;
 }
 
-// The read function for the proc file
 static ssize_t read_proc(struct file *file, char __user *user_buffer,
-                         size_t count, loff_t *offset) {
+                         size_t count, loff_t *offset)
+{
     printk(KERN_INFO "Called read_proc\n");
 
-    // Return EOF if already read
-    if (*offset > 0) {
+    // Return 0 (EOF) if already read or if count is too small for buffer
+    if (*offset > 0 || count < PROCFS_MAX_SIZE) {
         return 0;
     }
 
-    struct file* uart_file = open_uart_device();
-    if (!uart_file) {
-        return -EFAULT;
+    // Open the UART device
+    struct file* uart_file = filp_open("/dev/ttyACM0", O_RDONLY, 0);
+    if (IS_ERR(uart_file)) {
+        printk(KERN_ERR "Failed to open UART device: %ld\n", PTR_ERR(uart_file));
+        return PTR_ERR(uart_file);  // Return the actual error code
     }
 
-    // Send a command to the Arduino to read data from SRAM
-    const char *command = "READ";
-    ssize_t written = write_to_uart(uart_file, command, strlen(command));
-    if (written < 0) {
+    // Clear any leftover data in the UART buffer by reading a chunk of data
+    char discard_buffer[PROCFS_MAX_SIZE] = {0};
+    ssize_t discard_bytes = kernel_read(uart_file, discard_buffer, PROCFS_MAX_SIZE, &uart_file->f_pos);  // Discard data
+    if (discard_bytes < 0) {
+        printk(KERN_ERR "Failed to discard UART data\n");
         filp_close(uart_file, NULL);
-        return -EFAULT;
+        return discard_bytes;
     }
 
-    // Read the response from the Arduino (the data from SRAM)
-    ssize_t bytes_read = read_from_uart(uart_file, read_proc_buffer, sizeof(read_proc_buffer));
-    if (bytes_read < 0) {
-        filp_close(uart_file, NULL);
-        return -EFAULT;
+    // Now read fresh data from the UART
+    char uart_buffer[PROCFS_MAX_SIZE] = {0};
+    ssize_t total_read = 0;
+    ssize_t bytes_read;
+    
+    // Loop until we read the required data or no more data is available
+    while (total_read < PROCFS_MAX_SIZE) {
+        bytes_read = kernel_read(uart_file, uart_buffer + total_read, PROCFS_MAX_SIZE - total_read, &uart_file->f_pos);
+        
+        if (bytes_read <= 0) {
+            if (bytes_read == 0) {
+                printk(KERN_INFO "No more data available in UART buffer\n");
+            } else {
+                printk(KERN_ERR "Error reading from UART: %ld\n", bytes_read);
+            }
+            break;  // Exit if no more data is available
+        }
+        
+        total_read += bytes_read;
     }
 
-    // Copy the data to user space
-    if (copy_to_user(user_buffer, read_proc_buffer, bytes_read)) {
-        filp_close(uart_file, NULL);
-        return -EFAULT;
-    }
-
-    *offset = bytes_read;
     filp_close(uart_file, NULL);
-    return bytes_read;
+
+    // Copy the data from the kernel buffer to user-space
+    if (copy_to_user(user_buffer, uart_buffer, total_read)) {
+        printk(KERN_ERR "Failed to copy data to user-space\n");
+        return -EFAULT;
+    }
+
+    // Update the offset to return EOF for subsequent reads
+    *offset = total_read;
+
+    // Return the number of bytes read
+    return total_read;
 }
 
 // The write function for the proc file

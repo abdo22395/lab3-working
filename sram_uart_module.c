@@ -6,6 +6,8 @@
 #include <linux/serial.h>
 #include <linux/tty.h>
 #include <linux/termios.h>
+#include <linux/tty_flip.h>
+#include <linux/slab.h>
 
 #define PROCFS_MAX_SIZE 20
 #define UART_DEV "/dev/ttyACM0"  // UART device for Arduino
@@ -36,9 +38,18 @@ static ssize_t read_from_uart(struct file* uart_file, char *buffer, size_t len) 
     return bytes_read;
 }
 
+
+
+
+
+
 static ssize_t read_proc(struct file *file, char __user *user_buffer,
                          size_t count, loff_t *offset)
 {
+    struct file* uart_file = NULL;
+    struct tty_struct *tty = NULL;
+    ssize_t bytes_read = 0;
+    
     printk(KERN_INFO "Called read_proc\n");
 
     // Return 0 (EOF) if already read or if count is too small for buffer
@@ -48,46 +59,35 @@ static ssize_t read_proc(struct file *file, char __user *user_buffer,
     }
 
     // Open the UART device
-    struct file* uart_file = filp_open("/dev/ttyACM0", O_RDONLY, 0);
+    uart_file = filp_open("/dev/ttyACM0", O_RDONLY, 0);
     if (IS_ERR(uart_file)) {
         long err_code = PTR_ERR(uart_file);
         printk(KERN_ERR "Failed to open UART device: %ld\n", err_code);
         return err_code;  // Return the actual error code for better debugging
     }
 
-    // Optional: Small delay to ensure UART is ready to be read
-    msleep(50);
-
     // Get the tty structure associated with the UART device
-    struct tty_struct *tty = uart_file->f_inode->i_private;
+    tty = uart_file->f_inode->i_private;
     if (!tty) {
         printk(KERN_ERR "UART device does not have an associated tty struct\n");
         filp_close(uart_file, NULL);
         return -ENODEV;
     }
 
-    unsigned char uart_buffer[PROCFS_MAX_SIZE] = {0};
-    ssize_t bytes_read = 0;
+    // Read data directly from the UART device
+    bytes_read = tty->driver->receive_buf(tty, read_proc_buffer, PROCFS_MAX_SIZE);
 
-    // Check if the tty device is ready and can be read from
-    if (tty && tty->ops && tty->ops->read) {
-        // Read data directly from the UART device via the tty structure
-        bytes_read = tty->ops->read(tty, uart_buffer, PROCFS_MAX_SIZE);
-        if (bytes_read < 0) {
-            printk(KERN_ERR "Failed to read from UART device via tty: %ld\n", bytes_read);
-            filp_close(uart_file, NULL);
-            return bytes_read;
-        }
-    } else {
-        printk(KERN_ERR "No valid tty read operation available\n");
+    // Check if data was read successfully
+    if (bytes_read < 0) {
+        printk(KERN_ERR "Failed to read from UART device via tty: %ld\n", bytes_read);
         filp_close(uart_file, NULL);
-        return -EINVAL;
+        return bytes_read;
     }
 
     filp_close(uart_file, NULL);
 
     // Copy the data from the kernel buffer to user-space
-    if (copy_to_user(user_buffer, uart_buffer, bytes_read)) {
+    if (copy_to_user(user_buffer, read_proc_buffer, bytes_read)) {
         printk(KERN_ERR "Failed to copy data to user-space\n");
         return -EFAULT;
     }
@@ -97,7 +97,6 @@ static ssize_t read_proc(struct file *file, char __user *user_buffer,
 
     // Return the number of bytes read
     return bytes_read;
-
 }
 
 

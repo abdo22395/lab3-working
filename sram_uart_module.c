@@ -56,7 +56,6 @@ static ssize_t read_proc(struct file *file, char __user *user_buffer,
     }
 
     // Optional: Small delay to ensure UART is ready to be read
-    msleep(50);
 
     // Clear any leftover data in the UART buffer by reading a chunk of data
     char discard_buffer[PROCFS_MAX_SIZE] = {0};

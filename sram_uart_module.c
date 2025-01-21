@@ -5,6 +5,7 @@
 #include <linux/proc_fs.h>
 #include <linux/kernel.h>
 #include <linux/random.h>
+#include <linux/delay.h>  // For msleep()
 
 #define PROCFS_BUFFER_SIZE  256  // Increased buffer size to handle more data
 static char proc_buffer[PROCFS_BUFFER_SIZE];
@@ -52,6 +53,9 @@ static ssize_t read_proc_file(struct file *file, char __user *user_buffer,
 
         printk(KERN_INFO "Sent to UART: %s\n", uart_command);
 
+        // Add a delay (e.g., 200ms) before sending the READ command
+        msleep(200); // 200 ms delay
+
         // Now send the READ command
         char read_command[] = "READ 0";
         device_file = filp_open("/dev/ttyACM0", O_WRONLY, 0);
@@ -74,6 +78,9 @@ static ssize_t read_proc_file(struct file *file, char __user *user_buffer,
         written_once = true;
     }
 
+    // Add a delay (e.g., 100ms) before reading the UART response
+    msleep(100); // 100 ms delay
+
     // Now listen on the UART and capture the response
     struct file* uart_device_file = filp_open("/dev/ttyACM0", O_RDONLY, 0);
     if (IS_ERR(uart_device_file)) {
@@ -89,6 +96,9 @@ static ssize_t read_proc_file(struct file *file, char __user *user_buffer,
         printk(KERN_ERR "Error reading from /dev/ttyACM0: %zd\n", bytes_read);
         return -EFAULT;
     }
+
+    // Add a delay after reading the response (e.g., 200ms)
+    msleep(200); // 200 ms delay
 
     // Copy the UART response to the proc buffer to send to user space
     snprintf(proc_buffer, PROCFS_BUFFER_SIZE, "Received from UART: %s", uart_response);
@@ -149,4 +159,4 @@ module_init(module_init_function);
 module_exit(module_exit_function);
 
 MODULE_LICENSE("GPL");
-MODULE_DESCRIPTION("Custom Kernel Module for UART Communication");
+MODULE_DESCRIPTION("Custom Kernel Module for UART Communication with Delays");
